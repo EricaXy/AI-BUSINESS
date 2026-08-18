@@ -1,0 +1,983 @@
+// ══════════════════════════════════════════
+// CONFIG — Constants, Table IDs, Field IDs, Budget Targets
+// ══════════════════════════════════════════
+    // ── Config ──
+    const BASE_ID = 'appnqjDpqDniH3IRl';
+    const REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes
+
+    // ── AI models (never hardcode model IDs in feature files; a retired ID
+    // is an app-wide AI outage). The literals live in js/ai-models.js, which
+    // MUST be loaded before this file. Pages that cannot load config.js (they
+    // declare their own BASE_ID/PAT/TEAM) load js/ai-models.js directly and
+    // read window.AI_MODELS.* instead of these constants. ──
+    const AI_MODEL_DEFAULT = (window.AI_MODELS || {}).default;
+    const AI_MODEL_LIGHT = (window.AI_MODELS || {}).light;
+
+    // ── Slack notify worker (outbound DM dispatch). SaaS migration: swap
+    // for the Supabase Edge Function URL; request shape stays identical. ──
+    const SLACK_NOTIFY_URL = 'https://slack-notify.kevinbrittain.workers.dev/';
+
+    // ── Page & SOP Version Registry ──
+    const PAGE_REGISTRY = [
+        { id: 'overview',    name: 'Leadership Dashboard',           icon: '📊', pageVer: '2.63', sopFile: 'sop.html',                   sopVer: '2.9', standalone: 'index.html#overview' },
+        { id: 'os-strategy', name: 'Objective & Strategy',           icon: '🎯', pageVer: '1.35', sopFile: 'os/strategy/sop.html',       sopVer: '1.0', standalone: 'os/strategy/index.html' },
+        { id: 'tasks',       name: 'Tasks & Projects',   icon: '✅', pageVer: '1.131', sopFile: 'os/tasks/sop.html',             sopVer: '1.3', standalone: 'os/tasks/index.html' },
+        { id: 'cfv',        name: 'CFVs',                          icon: '🚨', pageVer: '1.33', sopFile: 'sop-cfvs.html',               sopVer: '1.6', standalone: 'index.html#cfv' },
+        { id: 'ceo-brief',  name: 'CEO Brief',                     icon: '☀️', pageVer: '1.0', sopFile: '',                            sopVer: '1.0', standalone: 'index.html#ceo-brief' },
+        { id: 'money',      name: 'Money Confidence',              icon: '🧭', pageVer: '1.1', sopFile: '',                            sopVer: '1.0', standalone: 'index.html#money' },
+        { id: 'wealth',     name: 'Wealth',                        icon: '📈', pageVer: '1.11', sopFile: '',                            sopVer: '1.0', standalone: 'index.html#wealth' },
+        { id: 'income',     name: 'Accounts Receivable Fixed',     icon: '💷', pageVer: '1.4', sopFile: '',                            sopVer: '1.0', standalone: 'index.html#income' },
+        { id: 'ar-variable', name: 'Accounts Receivable Variable', icon: '📤', pageVer: '1.3', sopFile: '',                            sopVer: '1.0', standalone: 'index.html#ar-variable' },
+        { id: 'costs',      name: 'Accounts Payable Fixed',        icon: '📋', pageVer: '1.10', sopFile: '',                            sopVer: '1.0', standalone: 'index.html#costs' },
+        { id: 'invoices',   name: 'Accounts Payable Variable',     icon: '🧾', pageVer: '2.22', sopFile: 'sop-invoices.html',           sopVer: '2.18', standalone: 'index.html#invoices' },
+        { id: 'pnl',        name: 'Profit & Loss',                 icon: '💰', pageVer: '2.27', sopFile: 'sop-pnl.html',               sopVer: '2.26', standalone: 'index.html#pnl' },
+        { id: 'transactions', name: 'Transactions',                icon: '🔍', pageVer: '1.1', sopFile: '',                            sopVer: '1.0', standalone: 'index.html#transactions' },
+        { id: 'coa',        name: 'Chart of Accounts',             icon: '📒', pageVer: '1.1', sopFile: 'sop-coa.html',                sopVer: '1.1', standalone: 'index.html#coa' },
+        { id: 'comms',      name: 'Inbound Comms',                 icon: '📨', pageVer: '2.60', sopFile: 'inbound-comms-sop.html',      sopVer: '2.59', standalone: 'follow-up.html' },
+        { id: 'compliance', name: 'Property Compliance',            icon: '✅', pageVer: '1.14', sopFile: 'sop-compliance.html',         sopVer: '1.13', standalone: 'compliance.html' },
+        { id: 'operations',  name: 'Operations',                    icon: '🏢', pageVer: '1.46', sopFile: '',                            sopVer: '1.0', standalone: 'os/operations/index.html' },
+        // KPI Library (Leadership section) — ADMIN ONLY. Never rendered in a
+        // client tenant's shell; the adminOnly flag is the contract the Supabase
+        // migration must honour. Replaced the Plan Builder entry 1 Aug 2026 on
+        // Kevin's direction (os/business-plan-builder/ files remain on disk).
+        { id: 'kpi-library', name: 'KPI Library', icon: '📚', pageVer: '1.5', sopFile: '', sopVer: '1.0', standalone: 'index.html#kpi-library', adminOnly: true },
+        { id: 'fintable',  name: 'Accounts',                       icon: '🏦', pageVer: '1.8', sopFile: '',                            sopVer: '1.0', standalone: 'index.html#fintable' },
+        { id: 'systemisation', name: 'Systemisation',              icon: '⚙️', pageVer: '1.6', sopFile: 'guides/systemisation.html',    sopVer: '1.0', standalone: 'os/systemisation/index.html' },
+        { id: 'os-team',    name: 'Team Members',                  icon: '👥', pageVer: '1.13', sopFile: '',                            sopVer: '1.0', standalone: 'os/team/index.html' },
+        // pageVer corrected by hand 2026-08-06: the auto-bump never fired for this page
+        // (crm-supabase.html was missing from the workflow `paths:` filter), so 1.0 was
+        // stale — the CRM gained a 14-step interactive walkthrough on 2026-08-04 (319b438).
+        // guides/crm.html still describes the page without it, so sopVer stays at 1.0 and
+        // this now reads as the version gap it always was.
+        { id: 'crm',        name: 'CRM',                           icon: '👥', pageVer: '1.1', sopFile: 'guides/crm.html',             sopVer: '1.0', standalone: 'crm-supabase.html' },
+        { id: 'content-machine', name: 'Content Machine',           icon: '🎬', pageVer: '1.0', sopFile: '',                            sopVer: '1.0', standalone: 'https://chaichoong.github.io/content-machine/' },
+        { id: 'prospecting', name: 'Prospecting',                   icon: '🧲', pageVer: '1.14', sopFile: 'sop-prospecting.html',        sopVer: '1.4', standalone: 'index.html#prospecting' },
+        { id: 'sitemap',    name: 'Site Map & Guides',             icon: '🔗', pageVer: '1.19', sopFile: 'sop-sitemap.html',            sopVer: '1.2', standalone: 'index.html#sitemap' },
+        { id: 'skills',     name: 'Skills Library',                icon: '🧠', pageVer: '1.6', sopFile: 'guides/skills.html',           sopVer: '1.0', standalone: 'index.html#skills' },
+        { id: 'ai-brain',  name: 'AI Brain',                       icon: '💭', pageVer: '1.0', sopFile: 'guides/ai-brain.html',         sopVer: '1.0', standalone: 'ai-brain.html' },
+        { id: 'how-it-works', name: 'How It Works',               icon: '🗺️', pageVer: '2.2', sopFile: '',                             sopVer: '1.0', standalone: 'how-it-works.html' },
+    ];
+
+    // Gmail Invoice Script URL — deploy gmail-invoice-script.gs as a Google Apps Script web app
+    // and paste the URL here. Leave empty to use static fallback data.
+    const GMAIL_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwzn-xAv2li7Qo8GrEEkELWzRNp0_4fcz9tiuxQdXiDDgwhCHpoRTTbDyF2K3Ks5wza/exec';
+
+    // Table IDs
+    const TABLES = {
+        accounts:      'tbl1nr0EcX2T62KME',
+        costs:         'tblx5kvhzNEI5TFlS',
+        tenancies:     'tblN51a88qTDB6iMH',
+        transactions:  'tbln0gzhCAorFc3zB',
+        rentalUnits:   'tblM3mZCR5kiEdWMj',
+        tenants:       'tblX4elTuu01gwBYh',
+        properties:    'tbl6f0OkAmTC2jbuG',
+        tasks:         'tblqB8b22hKBL4PF1',
+        teamMembers:   'tblco0p2OnlLQVAX7', // people AND the 17 AI agents (agents have no Airtable login)
+        categories:    'tbleWb8ioptnEwPR8',
+        subCategories: 'tblOTdRcPf8AgRz25',
+        businesses:    'tblpqkvWJJo8Uu25q',
+        invoices:      'tblkOTKIG2Tyiy9aM',
+        // Net worth lives HERE — one row per item per month, auto-stamped monthly.
+        // Airtable also holds "ZZ LEGACY — Net Worth Statement" (tblWtiyQikO2hOzeW):
+        // orphaned, last written Jan 2026, read by nothing. On 2026-07-21 it caused a
+        // false report of a six-month gap in Kevin's net-worth history. Never read it.
+        netWorthByMonth: 'tblvtDXCBJCHu9hnK', // Specific Net Worth Statement by Month (Wealth tab)
+        incomeBuckets:   'tbldMPjXTu7ho5f0T', // Income Buckets (Wealth tab — virtual overlay)
+        personalBudgets: 'tblm5ZxyoiLfaBAS4', // Personal Budgets (Wealth tab — monthly budget per personal category)
+        debtTerms:       'tblTz8ErAmQGu7rIZ', // Debt Terms (Wealth tab — loan/mortgage amortisation)
+        valuations:      'tblZYsa0u1M17N7ZE', // Property Valuations (Wealth tab — per-property value, latest Approved)
+        arVariable:    'tblmKRKZMJvUxN4h1', // Outbound Invoices (Accounts Receivable Variable)
+        objStrat:      'tblEBvFw8DonwxzGh', // Objective and Strategy (one row per business per quarter)
+        mainMethods:   'tbl065D58MBEJhjlp', // Main Methods (reusable steps linked from Objective)
+        projects:      'tblHrpTMd5LNYn8v1', // Projects (quarterly projects from Strategy push here)
+        reconAudit:    'tblbfuxYxu4uMMWwT', // AI Recon Audit — accuracy log (auto-pruned to last 35 days)
+        reconRules:    'tblQ9sFD7Fs5CaVwG', // AI Recon Rules — knowledge base learned from corrections
+        arrears:       'tblzG0B9oRRpszcgC', // Arrears Records — 7-stage credit control pipeline
+        arrearsLog:    'tblik5VI5Jy6tO2yc', // Arrears Contact Log — audit trail per contact event
+        sysWorkflows:  'tblLPoRHFBl0vqR24', // Systemisation Workflows
+        workflowSteps: 'tblTadoyWXFHbmYxm', // Workflow Steps (within Systemisation Workflows)
+        prospects:     'tbljHVGJoKJf8acy3', // Prospects — cold outbound pipeline (Prospecting tab)
+        prospectKeywords: 'tblB5tZrXNaKFe02j', // Prospect Keywords — LinkedIn search strings the daily agent runs
+        ceoBriefs:     'tblIxbzDSOCI5hqJn', // CEO Briefs — one row per weekday, written by the 09:00 money-daily worker
+    };
+
+    // ── Prospects field IDs (Airtable table: Prospects / tbljHVGJoKJf8acy3) ──
+    // Written by the daily prospecting agent (/prospect-daily skill), reviewed
+    // in the Prospecting tab, synced to GoHighLevel on approval by the agent.
+    const PROSPECT = {
+        name:            'fldJConBhbcg55dFE',  // Name (singleLineText, primary)
+        linkedin:        'fldokUrBcggRW91Ms',  // LinkedIn URL (url)
+        headline:        'fldWheU6cyPuuHYUE',  // Headline (singleLineText)
+        company:         'fldvP8ljYvuGI4Jif',  // Company (singleLineText)
+        website:         'fldXVOVAZ4l32O2up',  // Company Website (url)
+        email:           'fldAn2mzI9RoQCVSm',  // Contact Email (email)
+        emailSource:     'fldk9HsMY5pf9D0U8',  // Email Source (multilineText — was a singleSelect
+                                               // until 2026-08-04. The prospecting agent writes a
+                                               // sentence naming where the address was found, so
+                                               // every run minted a new single-use choice; it had
+                                               // reached 61. Free text, never a category: do not
+                                               // put this field in a filter or group-by.
+        emailConfidence: 'fld9h6F4K4jo2cD5d',  // Email Confidence (singleSelect: High/Medium/Low)
+        entityType:      'fld4eYVzxfQU74Mew',  // Entity Type (singleSelect: Limited Company / Sole Trader / Unknown)
+        chNo:            'fldQAvkn0p8KDj70h',  // Companies House No (singleLineText)
+        painSignal:      'fldvDtz1VuE40zyZI',  // Pain Signal (multilineText)
+        signalSource:    'fldRJgaACrUH5t9jC',  // Signal Source (singleSelect)
+        keyword:         'fldnO2nIgnADzlvFN',  // Keyword Matched (singleLineText)
+        status:          'fldNFSZrPsUF1NAd1',  // Status (singleSelect — 9-stage pipeline)
+        dateFound:       'fldSoTbvGYRI2R0bq',  // Date Found (date, ISO)
+        ghlId:           'fld2cltR75W6DYQuB',  // GHL Contact ID (singleLineText)
+        suppressedReason:'fldPlSHFy8iJgCopr',  // Suppressed Reason (singleSelect)
+        notes:           'fld4yWgjxOoZT9NIV',  // Notes (multilineText)
+        contactRoute:    'fld18VDzR2Iu1m2qt',  // Contact Route (singleSelect: Email reply / Email sequence / LinkedIn connect / Contact form / No route yet)
+        draftMessage:    'fldafL2q6G5g1TpT7',  // Draft Message (multilineText) — agent-drafted opener, Kevin edits before send
+        emailSubject:    'fldKcQIXhHE2r0PnP',  // Email Subject (singleLineText) — added 2026-08-07. Kevin sees and edits
+                                               // it in the Prospecting preview before approving; blank falls back to
+                                               // prospectDefaultSubject() so an un-backfilled record still sends.
+        nextFollowUp:    'fldYGbMRJmvSZqJu1',  // Next Follow-up (date) — agent checks for replies on this date; silence → Ltd to sequence, manual-track stops
+    };
+
+    // ── Outbound prospecting identity ──────────────────────────────────────
+    // ONE definition of who the cold emails come from and where the call is
+    // booked. Never hardcode either in a feature file: the drafts, the GHL
+    // send, the preview Kevin approves and the /prospect-daily skill must all
+    // agree, or he approves one thing and the prospect receives another.
+    //
+    // OD_BOOKING_URL is the PUBLIC page, not the calendar widget behind it.
+    // operationsdirector.co.uk/book-a-demo/ embeds the same GoHighLevel
+    // calendar (BcVVhAg1zLaPVEXj5ih0) in an iframe, so the booking outcome is
+    // identical — but the raw api.leadconnectorhq.com widget URL reads as spam
+    // in an email and exposes the CRM vendor. Verified 7 Aug 2026 by reading
+    // the live page's iframe src. If the site's booking page ever moves, change
+    // it HERE and nowhere else.
+    const OD_BOOKING_URL = 'https://operationsdirector.co.uk/book-a-demo/';
+    // postal and unsubscribe are NOT optional on a cold email. UK PECR requires a
+    // sender identity, a postal address and a simple way to refuse further mail in
+    // every marketing message, and the first three touches of the prospecting
+    // engine carried none of them. The address is the one already used in the
+    // GoHighLevel workflow footers (docs/ghl-sequence-copy-pack.md), so both
+    // channels say the same thing.
+    //
+    // Unsubscribe is a mailto, deliberately, not GHL's {{unsubscribe_link}} merge
+    // tag: these sends go out through the conversations endpoint and an unrendered
+    // merge tag would ship the literal braces to a stranger. A mailto works with no
+    // infrastructure at all and cannot fail to render.
+    const OD_SENDER = {
+        name:    'Kevin Brittain',
+        email:   'kevin@operationsdirector.co.uk',
+        title:   'Founder, Operations Director',
+        website: 'operationsdirector.co.uk',
+        postal:  'Operations Director, 61 Bridge Street, Kington, HR5 3DJ',
+        unsubscribeMailto: 'mailto:kevin@operationsdirector.co.uk?subject=Unsubscribe',
+    };
+
+    // ── Prospect Keywords field IDs (Airtable table: Prospect Keywords / tblB5tZrXNaKFe02j) ──
+    const PKEY = {
+        keyword: 'fldkgKnoJYEU0RDkE',  // Keyword (singleLineText, primary)
+        type:    'fldzIJbDDvNX5HvaN',  // Type (singleSelect: Pain Phrase / Role Keyword / Hashtag)
+        active:  'fld2RNZflCPTEV8Qd',  // Active (checkbox)
+        lastUsed:'fldV7wTV6TJx23k3l',  // Last Used (date, ISO)
+        found:   'fldHQasLEVwvCLJiA',  // Prospects Found (number) — running count written by the agent
+        notes:   'fldj3FXk0zPUINO2U',  // Notes (singleLineText)
+    };
+
+    // ── Team Member field IDs (Airtable table: Team Members / tblco0p2OnlLQVAX7) ──
+    // The table holds people AND the 17 AI agents. Agents have no Airtable
+    // login, so they carry no Member/email — only this formula name.
+    const TEAM_MEMBER_FIELDS = {
+        name: 'flds7xoRFQhcRTnbB',    // formula primary
+        isAgent: 'fldKGsz9kTpFypeOr', // checkbox — tick it and the record IS an AI agent
+    };
+
+    // ── Task field IDs (Airtable table: Tasks / tblqB8b22hKBL4PF1) ──
+    const TASK_FIELDS = {
+        name:        'fldgFjGBw6bTKJFCD',
+        status:      'fldx4qCw17UfrKpaN',
+        assignee:    'fldELMncVJYPDRJNc',
+        description: 'fldRGhBQViKZKtkQ6',
+        category:    'fldVDvfhfOUBNvAxe',
+        notes:       'fldR7apBzSp3oxFxz',
+        dueDate:     'fld7XP8w8kbxfETV4',
+        priority:    'fldS21RwmwOqt71LI',
+        attachments: 'fldEbs9cscRr8elcw',
+        timeEstimate:'fld10VzzbiNNgRmIi',
+        collaborators:'fldcq3t6uAPgWSOP8',
+        hardDeadline: 'fldZKzIxgyrQ8CG8a',
+        project:      'fldBg0rQy0FrOAkRN',
+        business:     'fldLu1Y4GzyWcDoxr',
+        recurring:    'fldNhDWBX5gQm2p6b',
+        // ── AI agent approval loop (31 Jul 2026) ──
+        // Agents propose; Kevin decides; the agent then carries the action out.
+        teamMember:      'flduCtmQGpOA4eWaj', // link → Team Members (holds the AI agent)
+        sentForApprovalBy:'fld30Yw8SWYVp049g',// link → Team Members (which agent raised it)
+        approver:        'fldLLAG5HQPEFEfE5', // singleCollaborator — who approves the agent's work (label 8 = Mica, label 12 = Kevin; empty = Kevin; tier 1 always Kevin)
+        approvalOutcome: 'fldrHBSr6qoUfaKuZ', // singleSelect verdict — the input to accuracy scoring
+        approvedAt:      'fldr4Mvf2RzKvhZhi', // dateTime
+        taskType:        'fldZ2moDV2041Sobc', // singleSelect — accuracy is scored per agent PER TASK TYPE
+        agentOutput:     'fldzswp8fx6PqpLQ5', // what the agent PRODUCED (Description is the brief it was given)
+        approvalFeedback:'fldtI7SJI4gEohHD1', // Kevin's words back to the agent
+        // ── AI share of work (9 Aug 2026) ──
+        completionDate:  'fldFOi1SwEKuJRmdN', // dateTime — when the task was actually completed
+        estimatedMinutes:'fldTK51tSz6vH3LYp', // formula — Time Estimate select converted to minutes
+    };
+
+    const TASK_TEAM = [
+        { key:'kevin', name:'Kevin Brittain',  email:'kevin@runpreneur.org.uk' },
+        { key:'mica',  name:'Mica Albovias',   email:'micaa.work@gmail.com' },
+        { key:'erica', name:'Ericamae Atenta', email:'atentaerica@gmail.com' },
+        { key:'gary',  name:'Gary Marsh',      email:'gkm.property.maintenance@outlook.com' },
+        { key:'rob',   name:'Rob Jackson',     email:'rjm320@hotmail.com' },
+        { key:'roy',   name:'Roy Lavin',       email:'roy.lavin1978@gmail.com' },
+    ];
+
+    // ── Arrears Records field IDs (Airtable table: Arrears Records / tblzG0B9oRRpszcgC) ──
+    // 7-stage credit control pipeline. One record per arrears journey (per missed payment).
+    // Branches by tenant type (read from tenantPayType on linked Tenant): Working / Universal Credit / Agent-Managed.
+    //
+    // DRIFT 2026-08-06: SUPERSEDED — no code reads ARREARS or ARREARSLOG. `js/arrears.js`
+    // replaced this design with Rent Statements (a live rent balance per tenancy, computed
+    // from transactions); its own header says so. The chase process was deferred, not
+    // cancelled, so the maps are kept rather than deleted.
+    //   - Arrears Records (tblzG0B9oRRpszcgC) still holds 53 rows from the old pipeline.
+    //     Nothing writes or reads them; they are stale, not live state.
+    //   - Arrears Contact Log (tblik5VI5Jy6tO2yc) is empty and was never used.
+    // Do not wire new code to these without deciding the chase process first. Deleting the
+    // 53 rows is Kevin's call — raised for review, not actioned here.
+    const ARREARS = {
+        ref:              'fldYvuHyhYplblMJr',  // Reference (singleLineText, primary) — e.g. "AR-2026-0001"
+        stage:            'fldV7xA2UZJHmbCHj',  // Stage (singleSelect)
+        status:           'fld710smZ58a3ObWR',  // Status (singleSelect)
+        pauseReason:      'fldNIFtwOCkrUzjvV',  // Pause Reason (singleSelect)
+        openedDate:       'fldj7oboumezTCLbQ',  // Opened Date
+        originalDueDate:  'fldll8HpWOmYkyKea',  // Original Due Date
+        amountOwed:       'fldMc2ymgBmTsIEJN',  // Amount Owed (currency, £)
+        lastContactDate:  'fldn3zefQ5emjxKVD',  // Last Contact Date
+        lastContactChannel:'fldqdrFQCfLTUKnE8', // Last Contact Channel (singleSelect)
+        nextActionDue:    'fld0AVSdS7y1zpQua',  // Next Action Due
+        nextActionType:   'fldXxv8J1zfxCOrMZ',  // Next Action Type
+        ucCallOutcome:    'fldpqYu5nix98zrZe',  // UC Call Outcome (singleSelect)
+        resolutionDate:   'fld3PwylEW5dX29m1',  // Resolution Date
+        resolutionType:   'fldptjB4iPkhcD4ed',  // Resolution Type (singleSelect)
+        tenancyEndAction: 'fldGfDTOgsz10brA6',  // Tenancy End Action (singleSelect)
+        notes:            'fld4B5Lz7P9dpQS8H',  // Notes
+        tenancy:          'fldXx3YsQrm9k4sze',  // Tenancy (link → Tenancies)
+        linkedTasks:      'fldxYYCWnV9DGsBIo',  // Linked Tasks (link → Tasks)
+        contactLog:       'fldbUpHVBgtDrts6Q',  // Contact Log (reverse link from Arrears Contact Log)
+    };
+
+    // ── Arrears Contact Log field IDs (Airtable table: Arrears Contact Log / tblik5VI5Jy6tO2yc) ──
+    // One record per contact event. Court-ready audit trail.
+    const ARREARSLOG = {
+        ref:           'fldRS88D7pFGba9tq',  // Reference (singleLineText, primary)
+        date:          'flds0QuML8fJDwwex',  // Date (dateTime, Europe/London)
+        stage:         'fldfYdMyB8HpSC8u2',  // Stage (singleSelect)
+        channel:       'fldb1Rasz3YO0ukHl',  // Channel (singleSelect)
+        direction:     'fld64LgBaNRvuJ7HX',  // Direction (Outbound / Inbound)
+        initiator:     'fldeNbrnL7o8GYfvN',  // Initiator (System / Mica / Other Staff / Tenant / UC Office)
+        outcome:       'fldFO4RI2Vz7uk0s3',  // Outcome (singleSelect)
+        promiseDate:   'fldSEdzbOqDksQUmZ',  // Promise Date
+        notes:         'fld800seLgSTMPgme',  // Notes
+        emailMsgId:    'fldAkO0awEK0IS0kP',  // Email Message ID
+        arrearsRecord: 'fldSWyS6JYgnLtPzU',  // Arrears Record (link → Arrears Records)
+        linkedTask:    'fldBLuUTLMTq2o82X',  // Linked Task (link → Tasks)
+    };
+
+    // UC office contact details (used by auto-generated Mica tasks)
+    const UC_CONTACT = {
+        phone: '0800 328 5644',
+    };
+
+    // AI Recon Audit field IDs
+    const RECAUDIT = {
+        txId:        'fld1n4hxZ0XD5FaR9',  // singleLineText — Airtable record ID of reconciled tx
+        date:        'fldJC9UcHCaXAaxKV',  // date (ISO) — when logged
+        wasAccurate: 'fld9n62GxQijQWqSA',  // checkbox — AI suggestion matched final values
+        // Diagnostics (added 6 Aug 2026). "Was Accurate" alone said the score was 64% for a
+        // month without ever saying WHICH of the seven graded fields missed, so the number
+        // could not be acted on. These three make a miss attributable and let us prove
+        // whether the knowledge base actually compounds.
+        mismatched:  'fldm4i2tYHhi4jFJb',  // singleLineText — CSV of fields that differed; '' when accurate
+        matchType:   'fld2Vv0QJ2dNq5iVv',  // singleLineText — Knowledge Base | Composite | Vendor | …
+        ruleConf:    'fldJ3tDV60HsOsJJ7',  // number — confidence of the rule that produced the suggestion
+    };
+
+    // AI Recon Rules field IDs — the knowledge base learned from Kevin's corrections.
+    // Lived in localStorage until 6 Aug 2026, which meant one browser, one device, and one
+    // cache clear away from losing every rule (the accuracy log was moved to Airtable in
+    // Apr 2026 for exactly that reason after browser storage was wiped).
+    const RECRULE = {
+        vendorKey:   'fldihhYBKnmL2y8qx',  // singleLineText (primary) — normalised vendor key
+        categoryId:  'fldHqfpAZwKT0bq7z',
+        categoryName:'fldQ4hSMAKSxvR7ft',
+        subCatId:    'fldqquIn11Z0sVSxT',
+        subCatName:  'fldUV6zdgwTiYuCfS',
+        businessId:  'fldTdqAPPTPcWzaqC',
+        businessName:'fld07ZzuTCTxdcCtC',
+        costId:      'fldAAB4YDBfmqhBLr',
+        costLabel:   'fld6xTuCzg7LqKf36',
+        tenantName:  'flddWiY46b0HGSwfY',
+        tenancyId:   'fldyUTRhlIBZEGotT',
+        tenancyLabel:'fldZ2sEnGUyhacUMa',
+        unitId:      'fldSZiDDvTowbvqgR',
+        unitName:    'fldRa2jU8URALBGOf',
+        propertyId:  'fldZMuKhHAX85X1sr',
+        // Raw bank descriptor this rule was learned from. The old key format destroyed token
+        // boundaries (punctuation was deleted, not spaced), so stored keys could not be
+        // re-derived. Keeping the source text means a future key-format change is migratable.
+        vendorSample:'flday8VIbWFZJvakK',
+        confidence:  'fldgVeiG1OOkaTepr',  // number — times this rule has been confirmed (cap 10)
+        updated:     'fld77kbxfK39HMek1',  // date (ISO)
+    };
+
+    // Accounts Receivable Variable field IDs (Airtable table: Outbound Invoices / tblmKRKZMJvUxN4h1)
+    const ARV = {
+        customer:    'fldArOB78EOU7cxAH',  // Customer (singleLineText, primary)
+        invoiceNo:   'fldKoLPrzQAlF2Vw5',  // Invoice Number (singleLineText)
+        desc:        'fldl5Qsh74M5wmtmx',  // Description (singleLineText)
+        amount:      'fldDMr0VjIbWHJqi4',  // Amount (currency, GBP)
+        dateSent:    'fldFNUCMDTRtZuD12',  // Date Sent (date)
+        dueDate:     'fldKqkarwj6uOrUpe',  // Due Date (date)
+        status:      'flduMxhnM1KUTh5g1',  // Status (singleSelect: Draft, Sent, Overdue, Paid, Written Off)
+        business:    'fldRCXYBrjK7bYmEU',  // Business (multipleRecordLinks → Businesses)
+        ref:         'fldQt6uXbpl0JaQ8n',  // Reference (singleLineText)
+        notes:       'fldLqONrPmTXnFDze',  // Notes (multilineText)
+    };
+
+    // Dashboard Invoices field IDs (Airtable)
+    const INV = {
+        threadId:      'fld1qMPjybCraA54H',
+        payee:         'fldBVAMn9vA1by7MN',
+        desc:          'fldT0onwVg9JDJ1sv',
+        amount:        'fldauZCUSWeIfGryG',
+        emailDate:     'fldEpaivUV4uXW3DP',
+        dueDate:       'fldrZ0BrweP0VCVyR',
+        ref:           'fldKq7JbfOIxeu1ai',
+        hasAttachment: 'fldt8sjSwrfzcfwwJ',
+        hasPdf:        'fldSJg8aLjPlD75rz',
+        gmailUrl:      'fldeFqA4TVNzDEMCh',
+        msgId:         'fldnbLSFMemMuLSzP',
+        status:        'fldJ5InUPlY4t7MgP',
+        paidDate:      'fld9GqL9RlLWPAymx',
+        matchRejected: 'fldSn94PRMyScVZA7',
+        isEstimate:    'fld4DNJoLG76I4xvz',
+        notes:         'fldV2xsw9en67ts0o',
+        matchedTx:     'fldpHf5vYCIgj3Scz',
+        business:      'fldzGhwp6rxwEFoxu',  // Linked → Businesses (multipleRecordLinks)
+    };
+
+    // ── Net Worth field IDs (Airtable: Specific Net Worth Statement by Month / tblvtDXCBJCHu9hnK) ──
+    // One row per asset/liability item per month. Used by the Wealth tab.
+    const NW = {
+        name:    'fldswqUWxdoQj1QPC',  // Name (singleLineText) — e.g. "Real Estate Portfolio"
+        amount:  'fld4biGCBBQbknNmF',  // Amount (currency, £)
+        type:    'fld2uSD30IeWqEJYU',  // Net Worth Type (singleSelect): Cash | Real Estate | Investments | Businesses | Credit Cards | Loans | Mortgages. A legacy combined "Investments & Real Estate" choice remains in Airtable with 0 records — delete it there; rows coded to it are excluded from totals (wealth.js only sums NW_ASSET_CLASSES).
+        month:   'fldN3YpeJVK9MtW2d',  // Month (singleSelect): January … December
+        year:    'fld0iFQ9PwFv0jKBa',  // Year (singleSelect): 2025, 2026, …
+    };
+    // The six classes, split into assets vs liabilities.
+    const NW_ASSET_CLASSES = ['Cash', 'Real Estate', 'Investments', 'Businesses'];
+    const NW_LIABILITY_CLASSES = ['Credit Cards', 'Loans', 'Mortgages'];
+
+    // ── Budgeted personal sub-categories (Chart of Accounts - Sub Categories) ────
+    // The personal-expense sub-categories that carry a MONTHLY BUDGET: Needs and
+    // Wants only. Transactions are coded to these by the reconciliation engine, so
+    // the Wealth tab sums spend per category per month and compares it to budget.
+    //
+    // Travel, Tax, Maintenance and Investment are deliberately ABSENT: they are
+    // bucket-funded, so they are not budgeted and not counted as expenditure. See
+    // PERSONAL_MONEY_GROUPS below. (Director Discretionary, Charity, Subsistence
+    // excluded = business.)
+    const PERSONAL_EXPENSE_SUBCATS = [
+        { id: 'recF1C2ZXBfNeYlGT', name: 'Household Essentials', group: 'Needs' },       // groceries, utilities, council tax, mobile/internet, mortgage, essential clothing
+        { id: 'rec6b96i917M64Nof', name: 'Transport', group: 'Needs' },                  // incl. parking
+        { id: 'recICmYNPZBQbeWWE', name: 'Loan Interest', group: 'Needs' },              // incl. credit-card interest — the cost of holding the debt
+        { id: 'rec4fuKSWoK8ftkLJ', name: 'Health', group: 'Needs' },
+        { id: 'recl1UbR0LhffjWbg', name: 'Insurance', group: 'Needs' },
+        { id: 'recPA5FxzccOfWvQd', name: 'Banking Fees', group: 'Needs' },
+        { id: 'rec2yAlBoqSZrXtHW', name: 'Professional Fees', group: 'Needs' },
+        { id: 'rec1KfO2hixb1DA2e', name: 'Loan Capital Repayment', group: 'Needs' },     // contractual — money you must find each month
+        { id: 'recism4LGdEx0Nh9Q', name: 'Discretionary Lifestyle', group: 'Wants' },    // non-essential, fun, choice purchases, optional clothing
+        { id: 'rec7uCvNlKGlieZMS', name: 'Discretionary Food & Drink', group: 'Wants' }, // optional extra food/drink
+    ];
+
+    // ── Wealth monthly cash-flow classification (by sub-category NAME) ──
+    // Mirrors the P&L sections so the Wealth cash-flow agrees with the P&L tab.
+    // Money in  = business revenue + genuine personal income.
+    // Money out = business costs (COGS + Operating Expenses).
+    // "Personal Income Drawings" is deliberately EXCLUDED (internal transfers from the
+    // business that would double-count rental income). Personal-expenditure subcats
+    // are NOT money-out here — they are draws, tracked separately lower on the page.
+    const CASHFLOW_INCOME_SUBCATS = ['Fixed Income', 'Variable Income', 'Rental Income'];
+    const CASHFLOW_PERSONAL_INCOME_SUBCATS = ['Personal Income Other'];
+    const CASHFLOW_COST_SUBCATS = [
+        'COGS Labour', 'COGS Sales Fees', 'COGS Product Costs', 'COGS Delivery Costs',
+        'COGS Commission', 'COGS Property Council Tax', 'COGS Property Utilities',
+        'COGS Property Reactive Maintenance', 'COGS Property Compliance',
+        'Opex Labour', 'Marketing', 'Premises / Overheads', 'Insurance',
+        'Software & Subscriptions', 'Professional Fees', 'Travel & Training',
+        'Operational Supplies', 'Subsistence', 'Director Discretionary Expenses',
+        'Charity', 'Mortgage Interest', 'Loan Interest',
+        // Capital repayments are real cash out for the Wealth money-out view (unlike the
+        // P&L, which treats them as balance-sheet). Only used here, never in the P&L.
+        'Mortgage Capital Repayment', 'Loan Capital Repayment',
+        'Bank Transaction Fees', 'Tax',
+    ];
+    // ── Money Groups: budgets vs buckets (the two halves of personal money) ──────
+    // Every personal sub-category is EITHER budgeted OR bucket-funded, never both.
+    //
+    //   Budgeted (Needs / Wants) — money that leaves as you spend it. It REDUCES net
+    //   cash flow and is monitored monthly against a budget set from history.
+    //
+    //   Bucket-funded (Debt / Dreams / Fix / Future / Tax) — money you set aside first
+    //   and release later. Spending it draws its pot down but must NOT reduce net cash
+    //   flow, because the pot was already funded out of an earlier month's surplus.
+    //
+    // Why that second rule matters: tax saved for 12 months then paid in one lump used
+    // to register as a £5k expense in the payment month, pushing net cash flow negative
+    // and starving EVERY bucket in the exact month the pot existed to absorb. Counting
+    // it once, in the pot, is the whole point of having the pot.
+    //
+    // The live driver is the "Money Group" single-select on Chart of Accounts - Sub
+    // Categories; this map only backstops it if the field is ever cleared.
+    const PERSONAL_MONEY_GROUPS = {
+        'Personal Household Essentials':      'Needs',
+        'Personal Transport':                 'Needs',
+        'Personal Health':                    'Needs',
+        'Personal Insurance':                 'Needs',
+        'Personal Banking Fees':              'Needs',
+        'Personal Professional Fees':         'Needs',
+        'Personal Loan Interest':             'Needs',  // the cost of holding debt — mandatory, buys nothing
+        'Personal Loan Capital Repayment':    'Needs',  // contractual: money you must find each month
+        'Personal Discretionary Food & Drink':'Wants',
+        'Personal Discretionary Lifestyle':   'Wants',
+    };
+
+    // Personal expenditure sub-categories (full Airtable names) — itemised and
+    // deducted on the Wealth cash-flow as your personal costs. Needs + Wants ONLY:
+    // bucket-funded categories are excluded on purpose (see PERSONAL_MONEY_GROUPS).
+    const CASHFLOW_PERSONAL_EXPENSE_SUBCATS = Object.keys(PERSONAL_MONEY_GROUPS);
+
+    // Bucket spend mapping: which personal sub-categories draw down each bucket.
+    // A transaction coded to one of these decrements that bucket's running balance
+    // WITHOUT counting as expenditure. This is the code-level fallback; the live
+    // driver is each bucket's Spend Sub-Categories link in the Income Buckets table.
+    //
+    // Debt draws on "Personal Credit Card Transfer" — the cash-account leg of a card
+    // payment. Deliberately the cash leg, not the card leg: it is the only one that
+    // covers cards with no open-banking feed (Barclaycard, NatWest), and because the
+    // amounts are SIGNED, a bounced direct debit coming back in nets itself off with
+    // no date-matching guesswork. Card spending itself is never counted here — it is
+    // already captured, categorised, when the card is tapped.
+    const BUCKET_SPEND_SUBCATS = {
+        'Debt':   ['Personal Credit Card Transfer'],
+        'Dreams': ['Personal Travel'],
+        'Fix':    ['Personal Maintenance'],
+        'Future': ['Personal Investment'],
+        'Tax':    ['Personal Tax'],
+    };
+
+    // ── Chart of Accounts - Sub Categories field IDs (tblOTdRcPf8AgRz25) ──────────
+    const SUBCAT = {
+        name:       'fldO4BTJhFv5EsN6i',  // Sub Category Name (singleLineText, primary)
+        moneyGroup: 'fld4sJbnOMJ4A1Uey',  // Money Group (singleSelect): Needs | Wants | blank
+    };
+
+    // ── Personal Budgets field IDs (Airtable: Personal Budgets / tblm5ZxyoiLfaBAS4) ──
+    // Monthly budget per personal-expense category, matched to PERSONAL_EXPENSE_SUBCATS by name.
+    const PBUDGET = {
+        category: 'fldojQ6v6xlaBSyml',  // Category (singleLineText, primary)
+        budget:   'fldhg2PGvzbyC3TbX',  // Monthly Budget (currency £)
+        sort:     'fldPO3rLzSM8DKy8k',  // Sort Order (number)
+    };
+
+    // ── Debt Terms field IDs (Airtable: Debt Terms / tblTz8ErAmQGu7rIZ) ──
+    // Loan/mortgage terms; the Wealth tab amortises the current balance from these.
+    const DEBT = {
+        name:      'fldo9nXP30QFfb5fx',  // Name (singleLineText, primary)
+        cls:       'fldYh1OsSeCTGzrGs',  // Class (singleSelect): Loans | Mortgages
+        type:      'fldaxUmB2EQEvO74k',  // Type (singleSelect): Repayment | Interest-only
+        principal: 'fldcK7C3Lvj8AkjiE',  // Original Amount (currency £)
+        rate:      'fldW6SrsqE5t3XjL1',  // Annual Rate % (number)
+        term:      'fldf4d9blAMhn3LAi',  // Term Months (number)
+        start:     'fldO7nbTpn0RvGY04',  // Start Date (date)
+        notes:     'fldRgR0iM5KqkBHuT',  // Notes (multilineText)
+        // Pipe-separated terms matched against a transaction name to find payments
+        // against a debt that has no bank feed (a closed card). Blank = no payments.
+        payMatch:  'fldgcwyxNgr8n4128',  // Payment Match (singleLineText)
+    };
+
+    // ── Property Valuations field IDs (Airtable: Property Valuations / tblZYsa0u1M17N7ZE) ──
+    // Per-property value snapshots (manual + AI). Wealth tab reads the latest Approved
+    // valuation per property and joins it to the matching Debt Terms mortgage balance.
+    const VAL = {
+        title:      'fldRBIx2kRFAVmH0k',  // Title (singleLineText, primary) — "<property> · <month>"
+        property:   'fldEEmN3R9fSsX9mr',  // Property (multipleRecordLinks) — array of Properties rec IDs
+        date:       'fldjuVUTvN7poUAgD',  // Date (date)
+        value:      'fldMecW8pkzlyY7Gp',  // Estimated Value (currency £)
+        source:     'fldu2CSv2DsCYDXmh',  // Source (singleSelect): AI Estimate | Manual | Surveyor | ...
+        status:     'fldQtbOpIQ2BR0yYz',  // Status (singleSelect): Pending Review | Approved | Rejected | Superseded
+        confidence: 'fldgFb0ICksUdb29u',  // Confidence (singleSelect): High | Medium | Low
+        comparables:'fldnldTHRVLBVrvOe',  // Comparables (multilineText)
+    };
+
+    // ── Income Buckets field IDs (Airtable: Income Buckets / tbldMPjXTu7ho5f0T) ──
+    // Virtual overlay for the Wealth tab. Net cash flow is split by Allocation % into
+    // each pot, from the bucket's Start Date onwards.
+    const BUCKET = {
+        name:    'fld58yk6iOatTIIxJ',  // Bucket (singleLineText, primary)
+        pct:     'fldJkDpfd9p36ddbC',  // Allocation % (number, 0dp) — e.g. 20 means 20%
+        // Opening Balance (currency £) — what was already in the pot on its Start Date.
+        // Renamed from "Balance" 2026-08-14: it used to be a hand-maintained running
+        // total that NOTHING read (the code that wrote it had been orphaned since the
+        // grid replaced the per-row editor), so a stale figure sat there looking live.
+        opening: 'fld50s2fcXr4vEiVy',
+        // Start Date (date, ISO) — the pot goes live from here. Allocation and spend
+        // before it are ignored entirely, so an old deficit is not dragged forward.
+        // Blank = BUCKET_DEFAULT_START.
+        start:   'fldo5P3NSnyKtrx7t',
+        sort:    'fldtUTeLjEpPJAcoy',  // Sort Order (number)
+        notes:   'fldQR5QoFToiHMTEn',  // Notes (multilineText)
+        spendSubs: 'fld6yClkQoMlOkiU4', // Spend Sub-Categories (multipleRecordLinks → subCategories): drives bucket draw-down
+    };
+
+    // Fallback start month for a bucket with no Start Date set. Kevin's decision,
+    // 2026-08-14: buckets go live 1 May 2026, and the Sep 2025 – Apr 2026 deficit is
+    // NOT carried forward. Before this, every pot ran a 12-month rolling cumulative
+    // that reset at the left edge of the window, so a pot silently changed value as
+    // the window rolled and four of five pots were pinned at £0 by old overspend.
+    const BUCKET_DEFAULT_START = '2026-05-01';
+
+    // Chart of Accounts - Categories: name field (primary). Used by the cash-flow
+    // drill-down so a miscoded transaction can be recategorised in place.
+    const CAT_NAME_FIELD = 'fldii4oUzSfmplihO';
+
+    // ── Chart of Accounts admin (Accounts › Chart of Accounts tab) ──────────────
+    // Every link field on the two Chart of Accounts tables. A record holding a link
+    // in ANY of them is in use, so the tab refuses to delete it: Airtable drops the
+    // link without complaint and orphans every cost and transaction behind it.
+    const COA_LINK_FIELDS = {
+        category: [
+            { id: 'fldiPocGB0YmrmKKp', label: 'Costs' },
+            { id: 'fldOlMnzZo0Cqt2dk', label: 'Transactions' },
+            { id: 'fldCkxSnqsx8gAs7f', label: 'Transaction Patterns' },
+            { id: 'fldAkFZX1OOc8AQws', label: 'Intercompany Adjustments' },
+            { id: 'fldtaEJ0XPE5JOxfK', label: 'Transactions (archive)' },
+        ],
+        subCategory: [
+            { id: 'fldnrhwtAGMqCsWvq', label: 'Costs' },
+            { id: 'fldKKcKrUYbt7U03q', label: 'Costs (reconciled)' },
+            { id: 'fldeaRp53IQ4vKbcP', label: 'Transactions' },
+            { id: 'fldCfcNDrEPQoY3Wg', label: 'Transaction Patterns' },
+            { id: 'fldNXuaPrzE49KUrw', label: 'Intercompany Adjustments' },
+            { id: 'fldTZJLw19uxO5Gef', label: 'Transactions (archive)' },
+            { id: 'fldqjAEH5H3e9cYwx', label: 'Income Buckets' },
+        ],
+    };
+
+    // Names the reporting code matches as STRING LITERALS. Rename one in Airtable
+    // and the report beside it silently drops that row to zero — no error, no clue.
+    // The Chart of Accounts tab reads most of them straight off the live constants
+    // (PNL_SECTIONS, CASHFLOW_*_SUBCATS, PERSONAL_MONEY_GROUPS, BUCKET_SPEND_SUBCATS)
+    // so that list can never drift. These two are the only literals in the codebase
+    // NOT reachable from a constant — verified 2026-08-15 by grepping all 49
+    // sub-category and 10 category names across js/ and scripts/.
+    const COA_EXTRA_PROTECTED = {
+        category: {
+            'Revenue': 'AI reconciliation looks this category up by name (js/reconciliation.js)',
+        },
+        subCategory: {
+            'Transfer': 'Wealth tab spots the credit-card payment leg by this name (js/wealth.js)',
+        },
+    };
+
+    // Sub-categories the code pins by RECORD ID, not name. Renaming these is safe —
+    // the ID never changes — but deleting one breaks the feature named beside it,
+    // so the tab blocks the delete even when the link count is zero. The ID-pinned
+    // sets held in REC and PERSONAL_EXPENSE_SUBCATS are picked up automatically.
+    const COA_ID_PINNED_SUBCATS = {
+        'recY5XDZspRDNjZOO': 'Cash flow excludes this from outflow matching (js/cashflow.js)',
+    };
+
+    // Business name field on the Businesses table — used by the Invoices tab dropdown
+    const BIZ_NAME_FIELD = 'fldbbRqVxLxUdHwIR';
+    // Active checkbox on the Businesses table — every business picker/filter in the app
+    // hides records where this is unchecked. Tick in Airtable to bring a business back.
+    const BIZ_ACTIVE_FIELD = 'fldhXBnRrngCVsgSk';
+
+    // Field IDs
+    const F = {
+        // Accounts
+        accGBP:           'fldhDG5jDA8Tu2JyI',
+        accLastUpdate:    'fld8HOlbBrXbHesoA',
+        accNetWorthClass: 'fld8MHoybEal88D0Z',  // Net Worth Class (singleSelect): Cash | Credit Card | blank=excluded
+        propInclude:      'flddayDb0932Mk8uA',  // Properties: Include in Net Worth (checkbox)
+        bizInclude:       'fldrAYgb6aYS1zTSr',  // Businesses: Include in Net Worth (checkbox)
+        // Costs
+        costName:         'fldS6FYfpkhu6tJG0',
+        costExpected:     'fld9JibXkMpTeMcxw',
+        costDueDay:       'fld7IsfiGvKpxEwSs',
+        costFrequency:    'fldvozTHvs5VH3lNi',
+        costPayStatus:    'fldXZNI96v8HgjuSh',   // legacy multi-status singleSelect — kept for migration only
+        costAccountAlias: 'fldX2QMLkSYzDEpIF',   // legacy lookup
+        costInactive:     'fldQJPGLFMbwVelsW',
+        costDueDateNext:  'fldQZBF4JzBsmWU87',
+        costSubCategory:  'fldRO90pSCj6ahVMC',   // Chart of Accounts - Sub Categories (linked)
+        costCategory:     'fldv3szZSuR2fWBFt',   // Chart of Accounts - Categories (linked)
+        costBusiness:     'fldrPjvdFPCKWqeyd',   // Business (linked)
+        costProperty:     'fld7nikJBPz3BoZJG',   // Property (linked)
+        // Costs — clean fields owned by the dashboard (single source of truth, written by reconciliation)
+        costEndDate:           'fldhTpqQsVAnHpTCz',  // existing "Last Payment Date" field — UI label: "End Date"
+        costLastReconDate:     'fldeMdOxYemcJwVRD',  // Last Reconciled Payment Date (new)
+        costLastReconAmount:   'fldaYYj2cInwtvOdJ',  // Last Reconciled Amount (new, currency £)
+        costLastReconAccount:  'fldFdBxF4EMABsg2v',  // Last Reconciled Account (new, links → Accounts)
+        costLastReconSubCat:   'fld8jYp42Y7s3NbrM',  // Last Reconciled Sub-Category (new, links → Sub-Categories)
+        costStatusNew:         'fldWl7mp9zTC2aaaQ',  // Cost Status (New): In Payment / Overdue / Inactive
+        costDaysOverdue:       'fldVV5SB9jHJx84IA',  // Days Overdue (number) — written by dashboard on load
+        costVarianceAmount:    'fldplK7AtAPJVlzyM',  // Variance Amount (£) — written by dashboard on load
+        costVarianceFlag:      'fldQ4gNa9s36SyHHQ',  // Variance Flag: Match / Soft / Hard / Unknown
+        costExpectedNext:      'fldiiWiiPLXkWg1Dc',  // Expected Next Payment (date) — written by dashboard on load
+        costLatestTxDate:      'fldDEWHeA35d8hYGf',  // Latest Transaction Date (rollup) — used by backfill heuristic
+        costTxCount:           'fldjPt9cgzywA6SZq',  // Transaction Count (count) — used by backfill heuristic
+        costVarianceDismissedAt: 'fldY5owE8PfjHO3ol', // Variance Dismissed At Recon — sticky dismissal anchor
+        costStatusLockedAt:    'flds0EonpkRbyOjZv',  // Status Locked Until Recon — manual override anchor
+        // Account fields
+        accountAlias:          'fld21HAxSawQCxICj',  // Account Alias (singleLineText on Accounts table)
+        // Transactions sub-category (already have txSubCategory = fldMRjSVzZVYeHb0A)
+        // Tenancies
+        tenRef:           'fldyNVvFn4x8GY14q',
+        tenRent:          'fldDMyfZLFMeONPq8',
+        tenDueDay:        'fldhy2U0CQmM2oS4P',
+        tenPayStatus:     'fldxU3dPUnbK0SCDq',
+        tenSurname:       'fldOXazTqBWieEOK2',
+        tenUnit:          'fld7cjLLEHKAx49OK',
+        tenPayFreq:       'fld5O24mC8vOezjXK',
+        // Transactions
+        txDate:           'fldoyQ6Rr9cHp3bgQ',
+        txAmount:         'fldN01r1hp7UQjgtm',   // raw **GBP — kept for reference only
+        txReportAmount:   'fldot7iisZeL3WrdR',   // Report Amount formula — use this for all displays
+        txReconciled:     'fldxKX1IbIFcAOnn5',
+        txSubCategory:    'fldMRjSVzZVYeHb0A',
+        txAccountAlias:   'fldBrjlbeaKFm3WzQ',
+        txVendor:         'fld0Xr8sboQ0ekJQJ',
+        txDescription:    'fldsbuAJCTsXHug4C',  // *Name — primary field on Transactions. The
+                                                  // Airtable "Split Transactions" automation
+                                                  // appends "(Split X of N)" to this field on splits.
+        txName:           'fldsbuAJCTsXHug4C',  // alias of txDescription — different intent (split logic)
+        txInvoiceData:    'fldT5qfiyt5DTLrp8',
+        txTeamMember:     'fldMwliSwEhLuumvd',
+        // Split mechanism
+        // ------------------------------------------------------------------
+        // Splits are owned by the Airtable "Split Transactions" automation
+        // (Operations Director base → Automations → Finance → Split
+        // Transactions). The automation triggers when `Split Count > 1` and
+        // an idempotency check on *Name passes (skips records already named
+        // "(Split 1 of N)"). It then renames the parent and creates N-1
+        // children with **GBP = original / N and Split Count = 1 each.
+        //
+        // The JS reconciliation Split feature is PATCH-ONLY — it sets
+        // `Split Count` on the source record and lets the automation own
+        // duplication. NEVER POST duplicate transactions from JS — that
+        // double-creates them and we end up with N × (N-1) extras. (See
+        // commit f5b7aad for the data-corruption incident this prevents.)
+        txSplitCount:     'fld20FWX7yjM8P2Kz',   // number — N. Default 1 = whole transaction.
+        txSplitOverride:  'fldQ37YsyR9r3EbkP',   // currency — per-portion amount. Set on split parents
+                                                  //   (whose raw **GBP stays at the bulk total) and on
+                                                  //   custom-amount children. txDisplayAmount() in
+                                                  //   shared.js reads this field for correct display.
+        txSplitStatus:    'fld7gZxUldVLZXnAB',   // formula → "Single" or "Split"
+        txOriginalAmount: 'fldh711ChnFGDvh1u',   // formula → echoes raw, for display
+        // Tenancy — tenant active/former status (rollup from Tenants table)
+        tenStatus:        'fldgWAyha1Uij1SZP',
+        // Rental Units
+        unitStatus:       'fldBvqysXBm9rIm0E',
+        unitProperty:     'fldUJNRGgzgyAwwjt',
+        unitPropName:     'fld7NBHkhjqfbcxk7',  // Property Name (Short) lookup
+        unitName:         'fldr8sliyu8h2jw9t',   // Rental Unit (primary field — formula)
+        unitNumber:       'fld3nPlpdXSExxDuq',   // Unit Number (number field)
+        // Tenants
+        tenantStatus:     'fldAXzP9SGIHiAhrv',
+        tenantName:       'fldxBKW7QnujSDWqA',
+        tenantPayType:    'fldZbrk8Xw5Dcwxhi',  // Rent Payment Type (singleSelect)
+        // Tenancy → Tenant link
+        tenLinkedTenant:  'fld1i5bDoHL3B6rUf',  // "Customers" — actual link to Tenants table
+        // CFV detection fields
+        tenPaidThisMonth: 'fldSNk1LWWcu517CA',  // Paid This Month? (formula)
+        tenDaysOverdue:   'fldrb4NVHdLefslPo',  // Number of Days Overdue (formula)
+        tenDaysUntilDue:  'fldDKdNdOsmdVnmGq',  // Days Until Due (formula)
+        tenNextDueDate:   'fldSPslO6Wh5IUSK3',  // Next Rent Due Date (formula)
+        tenUnitRef:       'fldql2nyQlPfkPP4p',  // Unit Reference (lookup)
+        tenProperty:      'fldxfIa0W1nqCbLo2',  // Property (lookup)
+        tenStartDate:     'fld2rPXwwV8dXb1zF',  // Tenancy Start Date
+        tenEndDate:       'fldwHhhKAq4f1nY9e',  // Tenancy End Date
+        // Tenant contact fields
+        tenantPhone:      'fldraHUkWfqo4olLF',  // Contact Number
+        tenantEmail:      'fldybEduFY3DWWTfT',  // Email Address
+        tenantNotes:      'fldfwxEf7I3XQDVtR',  // Notes
+        // Transaction reconciliation linked fields
+        txCategory:       'fldFPmNixqHPQy4D6',  // Chart of Accounts - Category (linked)
+        txTenancy:        'fldPmAMmxwqs4SdPa',  // Tenancy (linked)
+        txUnit:           'fldJGIhSbgXNIEW4a',  // Unit (linked)
+        txProperty:       'fldvp44VfF8uTTthp',  // Property (linked)
+        txCost:           'fldGkpkVqSeiGvUGL',  // Costs (linked)
+        txAccountLink:    'fld9hm24JQUPOCoWj',  // **Account (linked → Accounts) — actual account record link on tx
+        txBusiness:       'fldX1aFlJyzpXGhbF',  // Business (For Reports) (linked)
+        // CEO Briefs — written by scripts/slack-automation/money-daily-worker.js at 09:00
+        // weekdays, read by js/ceo-brief.js. IDs, not names: a rename in Airtable would
+        // break the brief silently, and the nightly drift monitor only watches IDs.
+        ceoDate:          'fldzLwBd3Mjg7rDxM',  // Date (date)
+        ceoOneThing:      'fldQDCAcd74Bb6mpY',  // One Thing (singleLineText)
+        ceoFirstStep:     'fld4O4EuxHzMWARV7',  // First Step (singleLineText)
+        ceoWhy:           'fldqooUbDCQ4yNlWQ',  // Why (multilineText)
+        ceoIgnoreToday:   'fldmC5AYRaJdfyFGx',  // Ignore Today (multilineText, newline-separated)
+        ceoBoardFlags:    'fldS7ZoGAS7sAJfJq',  // Board Flags (multilineText, newline-separated)
+        ceoHandedOff:     'fld9PQ10p8V4N8Y0U',  // Handed Off (multilineText, newline-separated) — work routed off Kevin and to whom
+        ceoMoneyLight:    'fldBIbjpHlA2QmVbO',  // Money Light (singleSelect: green | amber | red)
+        ceoSafeToAct:     'fldQ4JEWYpHpI2KDs',  // Safe To Act (currency)
+        ceoFullBrief:     'fldPkiaWvmYAoyHEl',  // Full Brief (multilineText, raw JSON)
+        ceoSourceStats:   'fldVgR25q8bqdub4c',  // Source Stats (multilineText, raw JSON)
+    };
+
+    // Objective & Strategy OS field IDs — maps the Airtable form fields shown in the
+    // Operations Director interface (Objective Plan + Strategy Plan screens).
+    // All fields live on table `objStrat`. One row per Business × Quarter × Year.
+    const OBJSTRAT = {
+        // Keys
+        business:       'fldLt6uDJ2xKCMlj2',  // link → businesses
+        businessName:   'fldzd28sBEghgt0mN',  // formula (display only)
+        quarter:        'fldQl2h3gCxYacE1k',  // singleSelect: Q1|Q2|Q3|Q4
+        year:           'fldARVrVpuCWxufQO',  // singleSelect
+        created:        'fldRreG5iDvyOFzPV',  // createdTime
+        // Objective page
+        objective:      'fldYgHiiw6acphydt',  // richText
+        targetWhat:     'fldjQXSVO7NRMAh3G',  // What we do
+        targetWho:      'fldxkPKMkdqMM1vbp',  // Who we do it for
+        targetHow:      'fldtXlnFTUotrbdSg',  // How we do it
+        customerProfile:'fld7H5Rq8cwmvpYpR',  // richText
+        enticement:     'fldkcHNdfJoK6kjN4',  // richText
+        // Undertakings 1–20 (singleLineText each) + rollup formula
+        undertakings: [
+            'fldMvrYLvhRTWUerX','fld32CDRhkJOjTBq7','fldSDqjnSAZ3stdQb','fldIgeNKX2guYYszV',
+            'flduKuWhOs7zlomms','fldwNocH22bQa9LB1','fld5mRnHYWdbvjLIS','fldVMWHoLTHljHxZb',
+            'fldwRtrRL3qCcrO9q','fld8whDbavzFNuRY4','fldyGXnRvocsk1jTV','fldqFY4hOBVBieTKA',
+            'fld9SKhpG433YIhgb','fldnJJBgt3lLlSfGB','fldotSquJccSH8SOj','fldYq0NdidT0NzzGt',
+            'fld7aPMenbDIhIBSt','fldb6A3vOQv2Js5Nw','fldyld465QsYr4fjA','fldF11iQAUiTCLqJu',
+        ],
+        undertakingsRollup: 'fldNrwHP8Mhn0qo9F', // formula
+        // USPs 1–5 + rollup
+        usps: [
+            'flda9n4I9qLENQ0Nr','fldv27HJQqw08jXXT','fld4R3dLs1n77RIgY','fldrESVKwXnCTd1oA','fldIO6AqnXjyo3Jbp',
+        ],
+        uspsRollup: 'fldzrM5OF7Ug933ye', // formula
+        // Main Method — two representations: linked-record slots (preferred, links to mainMethods table)
+        // plus plain-text step fields (used in the form screens) + a rollup formula.
+        mainMethodLinks: [
+            'fldqQIH0bU4hDSiL5','fldd6IJwHKPIb0CIl','fldAUbgvtC5lNXTdS','fldgYPzIjyt37wo6k',
+            'fldfw9UiUpzz4ndge','fldT6Lo73MJJ3xEPa','fld9bViCHPvZviENY','fld0TDbOBZ4JZVG2i',
+            'fldcUeyPErJIU8rvH','fldiWxDwMGyVuWMCr',
+        ],
+        methodSteps: [
+            'fldeUT30vYQ8UZ0LF','fldZPoyLCxSl43EvG','fldcBzIO63zGOYbMS','fld90iQaKfBhw925i',
+            'fldtRNL7C1GOsnfRO','fldy4hcD9lYV7YTwb','fldEgpGubfyRkB3wf','fld87YId2DxqVzk0M',
+            'fldmsugSqmNT1tS7g','fldS41sn0Nvypuyv6',
+        ],
+        methodStepsRollup: 'fldWSVBivNEzAaTmV', // formula
+        // Strategy page — 9/3/1-year targets + measurables
+        nineYearTarget:   'flduYqMW1Lq36fmL1',  // richText
+        threeYearTarget:  'fldd1kPbyy7chW1DF',  // richText
+        threeYearMeas:    ['flddkmWwi3d2Fbc26','fldj2bxU8eb6qwdY9','fldJKthrRxJuZ0GU7'],
+        oneYearTarget:    'fldFQ3s2fNKb248U0',  // richText
+        oneYearMeas:      ['fld3RZ5CEPdLMniSi','fldOEdOxwKDpuSJCI','fldxmn6Omfd7nJjDu'],
+        // Quarterly projects 1–3
+        quarterlyProjects: ['fldMRcqBdI6sixquu','fldzTGq0bsvSIch4v','fldWEzLxBkIptAqhq'],
+        // Per-QP details that port into Projects OS on sync. Shape matches
+        // the Projects table KPI + DoD schema so it's a 1-to-1 map.
+        // `linkedProject` (multipleRecordLinks → Projects table) stores a
+        // direct reference to the Project record created from this QP, so
+        // renames + dedup work by record ID rather than by name matching.
+        qpDetails: [
+            { kpiName: 'fldqDPdwM8eJDZgD6', kpiUnit: 'fldqtYFUdx2eAYHsh', kpiTarget: 'fldf3FGT4g8G1DBzW', owner: 'fld9HlP2aGAfVfQiE', tracking: 'fld1761Yhl833yC6S', dod: 'fldrepCn9UzSxZYL3', linkedProject: 'fldtBMn2nwhMBEtwh' },
+            { kpiName: 'fld9Hh5qXyDluw3vh', kpiUnit: 'fldqxZcM4gLnV1omM', kpiTarget: 'fldxajskhmYwVcdQf', owner: 'fld4ettrzsIiWDTNe', tracking: 'flduqlQ82atGIYo4c', dod: 'fldSA0ZNWdK2NBSjB', linkedProject: 'fldEdCkinxZZuDVw8' },
+            { kpiName: 'fldYLzoc9Iir6jUvC', kpiUnit: 'fldGJBh9UWZHpvSLT', kpiTarget: 'fldoInqEnbA89rgpT', owner: 'fldtIZeQi9DhX6KZZ', tracking: 'fldOCQ0WaBvvqiiOc', dod: 'fld3g1grdMSieW8zk', linkedProject: 'fldtQWnYYi9X1dah9' },
+        ],
+        // Monthly stepping stones — stored as "Q{n}. Month {m}" fields in the Airtable
+        // (Airtable field names mix "." and ":" — do not normalise, use the IDs).
+        // Access as monthlyStones[projectIndex][monthIndex], 0-based.
+        monthlyStones: [
+            ['fldA66Xm4zVoClUva','fldP91H4XWknwmlzo','fldglTQ9Ljyba0IqK'], // Project 1: M1, M2, M3
+            ['fldBcYzfU8zheE00j','fldr6WW4Xubhe2Vtm','fldqD4uHoPFIfR7Yi'], // Project 2: M1, M2, M3
+            ['fldayHcCRQlG3mLxe','fldp1YRY0eGzVJQqU','fldZ87UWBj2NYU9Jl'], // Project 3: M1, M2, M3
+        ],
+        // Embed URLs surfaced in the top of each page
+        strategyPlanEmbed: 'fldIRohvx2Hv6DQ4J',
+        orgChartEmbed:     'fldtiPGaxcpsGLP5t',
+        companyAdminEmbed: 'fld4wVQyI57SSNPH4',
+    };
+
+    // Main Methods table (reusable step library linked from OBJSTRAT.mainMethodLinks)
+    const MAIN_METHOD = {
+        name:         'fldRphzaAUzBqconG',  // Main Method (primary)
+        description:  'fldWDxL9EyS1iaGlf',  // multilineText
+        business1:    'fldi4uVOf2NgxiSKy',  // inverse link back to Objective & Strategy
+    };
+
+    // Systemisation Workflows table
+    const SYS_WF = {
+        name:            'fldsaS0jeoSRuJN28',
+        description:     'fld1cGXzKp8ab5nBr',
+        fulfillStage:    'fldoN7pdUv4CIcKf2',
+        department:      'fldTYbvsvqD1CQmxd',
+        status:          'fldBHe23lba7DkLci',
+        sortOrder:       'fldOAAESotc8rNKyu',
+        mainMethodStage: 'fldQZEvjCRYUaQdME',
+        business:        'fldQcQSnlSipSBhb4',
+        steps:           'fldjmfqk77Wr1aOs5',  // inverse link from Workflow Steps
+    };
+
+    // Workflow Steps table
+    const WF_STEP = {
+        name:        'fldqKG4mVY16PTNmO',
+        description: 'fldlSSG0bV9VyhKEN',
+        workflow:    'fldmGLPupz0fZFfch',
+        stepType:    'fldPHutLN9Q2c2SzU',
+        sopContent:  'fldyNojZsSjfF6lLI',
+        sopStatus:   'fldZo6pPcn1lNvOay',
+        sortOrder:   'fldOWS3MfMSVJyo0b',
+        skillId:     'fldOisvuXul0r1XUD',
+        tasks:       'fldzxG4dMwZiL9ZzK',  // inverse link from Tasks table
+    };
+
+    // Team Members table
+    const TEAM_TABLE = 'tblco0p2OnlLQVAX7';
+    const TEAM = {
+        name:              'flds7xoRFQhcRTnbB',  // formula (display name)
+        preferredName:     'fldFyTZu3vu1a7X3a',
+        fullLegalName:     'fld1DYEbtyVsO2GVP',
+        member:            'fldh16yvEgBy8uLKQ',  // singleCollaborator
+        role:              'fld6O2PpClGpTZd8N',  // link → Roles
+        department:        'fldi8KmXyedB1ixrr',  // link → Department
+        manager:           'fld2Wt9bHuIT9iia4',  // link → Team Members (self-ref, org chart)
+        workEmail:         'fldraub938ex3BqMU',
+        whatsApp:          'fldTZ0ReLsqpAHxE8',
+        profilePhoto:      'fldekq1yBG4ZC2jKU',  // attachment
+        jobTitle:          'fldWQldpgSxZRqUu5',
+        status:            'fldTOGTPw20khbtec',   // singleSelect: Onboarding/Active/Offboarding/Offboarded
+        startDate:         'fld9uw166E6TkGusD',
+        active:            'fld2YLfcPqSe6b60u',  // checkbox
+        contractDocs:      'fldqqOLK8d934TLdL',  // attachment
+        achievements:      'fldxGZDWnoAYp21Ey',  // link → Achievements
+        sops:              'fldVjCuHUCgzD5bqP',  // link → SOPs
+        sopsTask:          'fld4dpctNy2v57aL8',  // link → SOPs
+        trainingStatus:    'fldc2RdaXuuYPqymA',  // lookup from SOPs
+        performanceReviews:'fldmnlTfShMkPj88u',  // link → Performance Reviews
+        emergencyName:     'fldcDbWN6n7ja31RM',
+        emergencyPhone:    'fldzlBLXXCL1u55HH',
+        country:           'fld819Jpc8zHEUyVh',
+        workingDays:       'fld2XkmSBs70NvXKn',  // multipleSelects
+        weeklyCapacity:    'fldIwCBuf1B8KMbIp',  // number (hours)
+        utilisation:       'fldnt6iHzSrJkkEHJ',  // formula %
+        business:          'fldbvMos3oFMrb4W9',  // link → Business
+        slackHandle:       'fld3OV2XCYDAWwwbX',
+        managerEmail:      'fldw28xtoxwSJgH2Z',
+        constraints:       'fldvjbOZ7ejbFOQK9',  // multilineText
+        handbookLink:      'fldEIwDJhvGJ8FTgH',
+        dob:               'fldXOpDiYpVnxyDyL',
+        contractHR:        'fldxq9tYZVYrZFGdH',  // link → Contract HR OS
+    };
+
+    // Achievements table
+    const ACHIEVE_TABLE = 'tblHtx8o3zt1Rd8fF';
+    const ACHIEVE = {
+        title:       'fld371pHn1EQYRDq0',  // formula (display)
+        teamMember:  'fldntslZwKqS7jnkv',  // link → Team Members
+        titleAI:     'fldvux4XWfVhVZ87B',  // aiText
+        description: 'fldUxbt7ZOB5Ig1yD',
+        date:        'fld0dfmYoaMQEbXrU',
+        type:        'fldUh6dqEh9PNc8gr',  // singleSelect
+        source:      'fldlKhLHUYg1fPf7X',  // singleSelect
+        status:      'fldPO8gtvCy9qUN4D',  // singleSelect
+        approval:    'fldaNdproX7gYya93',  // checkbox
+    };
+
+    // Department table
+    const DEPT_TABLE = 'tbloIBoYzlF3URiYK';
+    const DEPT = {
+        name:       'fldDGaNynfawVs36F',
+        members:    'fldzNy5Pq2d51BQ5q',  // link → Team Members
+        head:       'fldaXgNKrRhwoQ3t1',  // link → Team Members
+        roles:      'fldg8PhceRBD86XcW',   // link → Roles
+    };
+
+    // Roles table
+    const ROLES_TABLE = 'tblHiFrzekohQk2lt';
+    const ROLES = {
+        role:       'fldR7jqnTLqFNdJ4Y',
+        members:    'fldXqrYpqdJEMyCpu',  // link → Team Members
+        department: 'fld45Tf2vWbbKVSEw',  // link → Department
+    };
+
+    // SOPs table (for training records)
+    const SOP_TABLE = 'tblF3tSfEajPQJHoI';
+    const SOP = {
+        title:          'fldKuv5brBlD02B63',
+        sopStatus:      'fld6qkVkFgzN2XGbQ',  // singleSelect
+        department:     'fldiLbmDHr6ghPRNr',   // link → Department
+        business:       'fldxbWsXSSnWj6qBA',   // link → Business
+        teamMember:     'fldm7Uew4thUsRwUe',   // link → Team Members
+        trainingStatus: 'fldJms3VbxHmkaHol',   // formula
+        sopVideo:       'fldileM23VJc0b8Kd',   // url
+        sopType:        'fldzhsJD96JFDRho6',   // singleSelect
+    };
+
+    // Budget targets
+    const MAINT_TARGET_GBP = 1000;     // £1,000/month maintenance budget
+    const WAGES_TARGET_GBP = 1500;     // £1,500/month wages budget
+    const CFV_TARGET_GBP = 1500;       // £1,500/month CFV allowance
+    const CLEAR_PROFIT_TARGET = 10000; // £10,000/month clear profit after all variable costs
+
+    const REC = {
+        santander:         'rec3LiEiifomEHlvy',
+        tntZempler:        'recsR9QhRKYwgV8oP',
+        lloydsCreditCard:  'recPdnCnL0QvUQOiX',
+        americanExpress:   'recjJMy49enwgqWpo',
+        santanderCC:       'recwmjHfRZhODkFPV',
+        subRentalInc: 'recI8yCstyDP1Nd4b',
+        subMaint:     'recWomXYQ3XTgMdrr',
+        subOpexLabour:'rec7EdEwWXk2cQ0PG',
+        subCOGSLabour:'rec8ArDC6YbfOJydg',
+    };
+
+    // Payment status choice IDs
+    const PS = {
+        tenInPayment:    'sel4I99slfpd7Vc1t',
+        tenCFVActioned:  'selmhFXah5Bodgg9x',
+        tenCFV:          'sel2mWzsvOd8d8de0',
+        // Costs > Payment Status (the LEGACY field costs are actually filtered on).
+        // Live choices, confirmed against the Airtable schema 2026-08-02:
+        //   In Payment (81 costs) · Overdue (9) · Paused (28) · Inactive (62)
+        costInPayment:   'selGrWUm5NkfcY607',
+        costOverdue:     'selGB3gE7Bg7jKoIS',
+        costPaused:      'selzQhQoQQXe3DXMK',
+        costInactive:    'sel5UTLLcZTdRVq6m',
+        // DRIFT: removed from Airtable — detected 2026-08-02, no record holds them.
+        // Left commented rather than deleted so a future run can see they were real.
+        // costActive:      'selwuotKAoizHJl6z',
+        // costDueToday:    'selZazCz6gUJJ8Pl8',
+        // costUpcoming:    'selypOeFtsBePQG1E',
+        // Cost Status (New) — clean status field used by the AP Fixed dashboard
+        costNewInPayment: 'sel9bem92hq9d0926',
+        costNewOverdue:   'selc7o2vZ0szCzzBB',
+        costNewInactive:  'sel43EzvHZXeLZbwC',
+    };
+
+    let PAT = '';
+    let cashflowChartInstance = null;
+    let refreshTimer = null;
+    let allTransactions = []; // stored globally for invoice cross-referencing
+    let allTenancies = [];    // stored globally for CFV tab
+    let allTenants = [];      // stored globally for CFV tab (contact details)
+    let allCosts = [];        // stored globally for reconciliation
+    let allCategories = [];   // Chart of Accounts categories
+    let allSubCategories = []; // Chart of Accounts sub-categories
+    let allBusinesses = [];   // Business entities
+    let allAccounts = [];     // Bank/credit-card account records — used by sync-bar health checks
+    let allRentalUnits = [];  // Rental unit records — used by sync-bar health checks
+

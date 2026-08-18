@@ -1,0 +1,367 @@
+// ══════════════════════════════════════════
+// SYNC BAR + HEALTH CHECK — shared across all tabs
+// ══════════════════════════════════════════
+// Each tab registers a config with a refresh function and a list of checks.
+// The checks are functions returning { status: 'pass'|'warn'|'fail', detail: '…' }.
+// The bar shows freshness + a roll-up health pill; clicking the pill expands a
+// drawer with each check's status and detail. The intent: at any moment Kevin
+// can verify "the data on this tab actually matches Airtable AND every
+// automation that should be running is running" — exactly the kind of check
+// that confirmed Inbound Comms was healthy.
+//
+// Usage from a tab's renderer (called after data loads successfully):
+//   registerSyncBar('overview', {
+//     refreshFn: () => loadDashboard(),
+//     checks: [
+//       { name: 'Santander balance loaded', kind: 'sync', run: () => {…} },
+//       { name: 'Smart refresh timer running', kind: 'automation', run: () => {…} },
+//     ],
+//   });
+//   markTabSynced('overview');
+//
+// Each check's run() returns:
+//   { status: 'pass'|'warn'|'fail', detail: 'human-readable line' }
+
+    // Local escHtml fallback so this module works inside iframe pages that don't load shared.js.
+    // Same semantics as shared.js's version.
+    const _escHtml = (typeof escHtml === 'function')
+        ? escHtml
+        : (s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])));
+
+    const _syncBars = {}; // tabId → { lastSyncedAt, refreshFn, isRefreshing, checks, drawerOpen, lastResults, lastRunAt }
+
+    function registerSyncBar(tabId, config) {
+        const existing = _syncBars[tabId] || {};
+        _syncBars[tabId] = {
+            lastSyncedAt: existing.lastSyncedAt || null,
+            isRefreshing: existing.isRefreshing || false,
+            drawerOpen: existing.drawerOpen || false,
+            lastResults: existing.lastResults || null,
+            lastRunAt: existing.lastRunAt || null,
+            ...config,
+        };
+        renderSyncBar(tabId);
+    }
+
+    function markTabSynced(tabId) {
+        const s = _syncBars[tabId];
+        if (!s) return;
+        s.lastSyncedAt = Date.now();
+        s.isRefreshing = false;
+        s._pendingRetries = 0;
+        // Auto-run passive checks only — active checks (heavy round-trips) wait
+        // for the user to click Re-run in the drawer. This keeps the auto-pill
+        // up-to-date on every load without burning Airtable rate limits or
+        // running test writes on every dashboard refresh.
+        runHealthChecks(tabId, { activeOnly: false });
+    }
+
+    function markTabRefreshing(tabId) {
+        const s = _syncBars[tabId];
+        if (!s) return;
+        s.isRefreshing = true;
+        renderSyncBar(tabId);
+    }
+
+    // Run health checks for a tab.
+    //   { activeOnly: false }   — passive only (auto, runs on every markTabSynced)
+    //   { activeOnly: true }    — only the active (heavy round-trip) ones
+    //   { activeOnly: 'all' }   — both passive and active (default for user-clicked Re-run)
+    //
+    // Each check declares `active: true` if it does a heavy operation (Airtable
+    // create+delete, HTTP ping per registered link, etc.) that we don't want
+    // running on every dashboard refresh. Active checks display "Click Re-run
+    // to verify" until explicitly invoked.
+    async function runHealthChecks(tabId, opts) {
+        const s = _syncBars[tabId];
+        if (!s) return;
+        const allItems = s.checks || [];
+        opts = opts || {};
+        const which = (opts.activeOnly === true) ? 'activeOnly'
+                    : (opts.activeOnly === false) ? 'passiveOnly'
+                    : 'all';
+
+        // Decide which checks actually run this round.
+        const runIdx = new Set();
+        allItems.forEach((c, i) => {
+            const isActive = c.active === true;
+            if (which === 'all') runIdx.add(i);
+            else if (which === 'activeOnly' && isActive) runIdx.add(i);
+            else if (which === 'passiveOnly' && !isActive) runIdx.add(i);
+        });
+
+        // Initial render so the user sees feedback while async checks run.
+        // For checks NOT in this round, preserve their previous result if any.
+        const prevByName = {};
+        (s.lastResults || []).forEach(r => { prevByName[r.name] = r; });
+        s.lastResults = allItems.map((c, i) => {
+            if (runIdx.has(i)) return { name: c.name, kind: c.kind || 'sync', active: !!c.active, status: 'pending', detail: 'Running…' };
+            if (prevByName[c.name]) return prevByName[c.name];
+            // Active check that's never been run — show a "click to verify" placeholder
+            if (c.active) return { name: c.name, kind: c.kind || 'sync', active: true, status: 'warn', detail: 'Click Re-run in the drawer to verify' };
+            return { name: c.name, kind: c.kind || 'sync', active: false, status: 'pending', detail: 'Not yet run' };
+        });
+        s.lastRunAt = Date.now();
+        renderSyncBar(tabId);
+
+        // Run only the selected checks
+        const settled = await Promise.allSettled(
+            allItems.map((c, i) => runIdx.has(i) ? Promise.resolve().then(() => c.run()) : Promise.resolve(null))
+        );
+        s.lastResults = allItems.map((c, i) => {
+            if (!runIdx.has(i)) return s.lastResults[i]; // preserved
+            const sr = settled[i];
+            if (sr.status === 'rejected') {
+                return { name: c.name, kind: c.kind || 'sync', active: !!c.active, status: 'fail', detail: 'Check threw: ' + ((sr.reason && sr.reason.message) || String(sr.reason)) };
+            }
+            const r = sr.value || { status: 'warn', detail: 'No result returned' };
+            return _normalisePending({ name: c.name, kind: c.kind || 'sync', active: !!c.active, ...r });
+        });
+        s.lastRunAt = Date.now();
+        renderSyncBar(tabId);
+
+        // While anything is still loading in the background, quietly re-run
+        // the passive checks so transient "still loading" states resolve on
+        // their own instead of sitting as warnings until a manual Re-run.
+        const stillPending = s.lastResults.some(r => r.status === 'pending' && !r.active);
+        clearTimeout(s._pendingTimer);
+        if (stillPending && (s._pendingRetries || 0) < 6) {
+            s._pendingRetries = (s._pendingRetries || 0) + 1;
+            s._pendingTimer = setTimeout(() => runHealthChecks(tabId, { activeOnly: false }), 5000);
+        }
+    }
+
+    // A check that reports "data still loading" is a loading state, not a
+    // health problem. Checks can return status 'pending' explicitly; this
+    // also catches older checks that report loading states as warn/fail.
+    function _normalisePending(r) {
+        if (r.status === 'warn' || r.status === 'fail') {
+            const d = String(r.detail || '');
+            if (/still loading|loading in background|not yet loaded|waiting for data/i.test(d)) {
+                return { ...r, status: 'pending' };
+            }
+        }
+        return r;
+    }
+
+    // Convenience for the drawer: re-run ALL checks (passive + active).
+    function runAllHealthChecks(tabId) { return runHealthChecks(tabId, { activeOnly: 'all' }); }
+
+    function _formatAge(ms) {
+        if (ms == null) return 'never';
+        const sec = Math.floor(ms / 1000);
+        if (sec < 5) return 'just now';
+        if (sec < 60) return sec + 's ago';
+        const min = Math.floor(sec / 60);
+        if (min < 60) return min + ' min ago';
+        const hr = Math.floor(min / 60);
+        if (hr < 24) return hr + 'h ago';
+        return Math.floor(hr / 24) + 'd ago';
+    }
+
+    function _rollupStatus(results) {
+        if (!results || !results.length) return 'unknown';
+        const settled = results.filter(r => r.status !== 'pending');
+        if (!settled.length) return 'pending';
+        if (settled.some(r => r.status === 'fail')) return 'fail';
+        if (settled.some(r => r.status === 'warn')) return 'warn';
+        return 'pass';
+    }
+
+    // Broadcast a tab's rollup status so the parent shell can mirror it as a
+    // sidebar dot — single glance at the sidebar tells Kevin if anything's off.
+    // In iframe pages we postMessage up; in the parent we call directly.
+    function _broadcastStatus(tabId) {
+        const s = _syncBars[tabId];
+        if (!s) return;
+        const status = s.isRefreshing ? 'refreshing' : _rollupStatus(s.lastResults);
+        try {
+            if (window.parent && window.parent !== window) {
+                window.parent.postMessage({ type: 'syncBarStatus', tabId, status }, '*');
+            }
+        } catch (_) { /* cross-origin or no parent — fine */ }
+        if (typeof updateSidebarHealth === 'function') {
+            try { updateSidebarHealth(tabId, status); } catch (_) {}
+        }
+    }
+
+    // Public read access for the current rollup, e.g. for the parent shell to
+    // re-query a tab on demand without waiting for the next broadcast.
+    function getTabRollup(tabId) {
+        const s = _syncBars[tabId];
+        if (!s) return 'unknown';
+        if (s.isRefreshing) return 'refreshing';
+        return _rollupStatus(s.lastResults);
+    }
+
+    function renderSyncBar(tabId) {
+        const host = document.querySelector(`[data-sync-bar="${tabId}"]`);
+        if (!host) return;
+        const s = _syncBars[tabId] || {};
+
+        const ageMs = s.lastSyncedAt ? Date.now() - s.lastSyncedAt : null;
+        let dotClass = 'gray';
+        let timeText = 'Not yet loaded';
+        if (s.isRefreshing) {
+            dotClass = 'blue';
+            timeText = 'Refreshing…';
+        } else if (s.lastSyncedAt) {
+            timeText = 'Synced ' + _formatAge(ageMs);
+            if (ageMs < 5 * 60000) dotClass = 'green';
+            else if (ageMs < 30 * 60000) dotClass = 'amber';
+            else dotClass = 'red';
+        }
+
+        const rollup = _rollupStatus(s.lastResults);
+        // Health dot inherits the worse of (freshness, health) so a single glance tells Kevin if anything is off
+        if (rollup === 'fail') dotClass = 'red';
+        else if (rollup === 'warn' && dotClass === 'green') dotClass = 'amber';
+
+        let pillText = '— No checks';
+        let pillClass = 'gray';
+        if (s.lastResults && s.lastResults.length) {
+            const pass = s.lastResults.filter(r => r.status === 'pass').length;
+            const pending = s.lastResults.filter(r => r.status === 'pending').length;
+            const total = s.lastResults.length - pending;
+            if (rollup === 'pending') {
+                pillText = 'Checking…';
+                pillClass = 'gray';
+            } else {
+                pillText = `${pass}/${total} checks ${rollup === 'pass' ? '✓' : rollup === 'warn' ? '⚠' : '✗'}${pending ? ` · ${pending} loading` : ''}`;
+                pillClass = rollup === 'pass' ? 'green' : rollup === 'warn' ? 'amber' : 'red';
+            }
+        }
+
+        const refreshDisabled = s.isRefreshing || !s.refreshFn;
+        const drawerHtml = s.drawerOpen ? _renderDrawer(tabId, s) : '';
+
+        host.innerHTML = `
+            <div class="sync-bar">
+                <span class="sync-bar-dot ${dotClass}" aria-hidden="true"></span>
+                <span class="sync-bar-time">${_escHtml(timeText)}</span>
+                <button class="sync-bar-refresh" onclick="triggerSyncBarRefresh('${tabId}')" ${refreshDisabled ? 'disabled' : ''} title="Re-fetch this tab's data">↻ Refresh</button>
+                <button class="sync-bar-health ${pillClass}" onclick="toggleHealthDrawer('${tabId}')" title="Click to expand checks">${pillText}</button>
+                ${s.guideUrl ? `<button class="sync-bar-guide" onclick="openPageGuide('${_escHtml(s.guideUrl)}')" title="How this page works, in plain English">📖 Page guide</button>` : ''}
+            </div>
+            ${drawerHtml}
+        `;
+
+        // Mirror this tab's rollup to the parent shell's sidebar dot.
+        _broadcastStatus(tabId);
+    }
+
+    function _renderDrawer(tabId, s) {
+        const results = s.lastResults || [];
+        if (!results.length) {
+            return `<div class="sync-bar-drawer"><em style="color:var(--text-muted)">No checks defined for this tab yet.</em></div>`;
+        }
+        const grouped = { sync: [], automation: [] };
+        results.forEach(r => {
+            const k = (r.kind === 'automation') ? 'automation' : 'sync';
+            grouped[k].push(r);
+        });
+        const renderGroup = (heading, items) => {
+            if (!items.length) return '';
+            return `
+                <div class="sync-check-group">
+                    <div class="sync-check-heading">${heading}</div>
+                    ${items.map(r => `
+                        <div class="sync-check-item ${r.status}">
+                            <span class="sync-check-icon">${r.status === 'pass' ? '✓' : r.status === 'pending' ? '…' : r.status === 'warn' ? '⚠' : '✗'}</span>
+                            <div class="sync-check-body">
+                                <div class="sync-check-name">${_escHtml(r.name)}${r.active ? ' <span class="sync-check-active-tag">active</span>' : ''}</div>
+                                <div class="sync-check-detail">${_escHtml(r.detail || '')}</div>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        };
+        const lastRunText = s.lastRunAt ? 'Checks last run ' + _formatAge(Date.now() - s.lastRunAt) : '';
+        const hasActive = (s.checks || []).some(c => c.active === true);
+        const activeNote = hasActive
+            ? '<span style="color:var(--text-muted);font-size:var(--fs-xs);margin-left:6px">· "Re-run" includes deep round-trip checks</span>'
+            : '';
+        return `
+            <div class="sync-bar-drawer">
+                <div class="sync-bar-drawer-header">
+                    <strong>Health check</strong>
+                    <span style="color:var(--text-muted);font-size:var(--fs-xs);margin-left:8px">${_escHtml(lastRunText)}</span>
+                    ${activeNote}
+                    <button class="sync-bar-rerun" onclick="runAllHealthChecks('${tabId}')" title="Re-run all checks (including deep round-trip ones)">Re-run</button>
+                </div>
+                ${renderGroup('Data sync', grouped.sync)}
+                ${renderGroup('Automations & feature health', grouped.automation)}
+            </div>
+        `;
+    }
+
+    function triggerSyncBarRefresh(tabId) {
+        const s = _syncBars[tabId];
+        if (!s || !s.refreshFn || s.isRefreshing) return;
+        markTabRefreshing(tabId);
+        Promise.resolve()
+            .then(() => s.refreshFn())
+            .catch(e => console.warn(`[sync-bar] refresh failed for ${tabId}`, e))
+            .finally(() => {
+                // Each tab's load function is responsible for calling markTabSynced when done.
+                // Fallback: if 30s passes without it being called, force-clear the spinner so
+                // the UI never gets stuck on "Refreshing…".
+                setTimeout(() => {
+                    const cur = _syncBars[tabId];
+                    if (cur && cur.isRefreshing) markTabSynced(tabId);
+                }, 30000);
+            });
+    }
+
+    // Open a tab's page guide in an overlay. Kept in-app rather than a new browser
+    // tab so the guide sits beside the thing it explains — you read a step, close it,
+    // and the page is still where you left it.
+    function openPageGuide(url) {
+        closePageGuide();
+        const o = document.createElement('div');
+        o.id = 'pageGuideOverlay';
+        o.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:10001;display:flex;align-items:center;justify-content:center;padding:20px';
+        o.onclick = e => { if (e.target === o) closePageGuide(); };
+        o.innerHTML = `<div style="background:var(--bg-surface);border-radius:var(--radius-lg);width:100%;max-width:1100px;height:90vh;display:flex;flex-direction:column;box-shadow:var(--shadow-lg);overflow:hidden">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 16px;border-bottom:1px solid var(--border-default);flex:0 0 auto">
+                <strong style="font-size:var(--fs-md);color:var(--text-primary)">📖 Page guide</strong>
+                <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+                    <a href="${_escHtml(url)}" target="_blank" rel="noopener" style="font-size:var(--fs-sm);color:var(--accent);text-decoration:none">Open in a new tab ↗</a>
+                    <button onclick="closePageGuide()" aria-label="Close" style="background:none;border:none;font-size:26px;line-height:1;cursor:pointer;color:var(--text-muted);padding:0 4px">&times;</button>
+                </span>
+            </div>
+            <iframe src="${_escHtml(url)}" title="Page guide" style="border:0;flex:1 1 auto;width:100%"></iframe>
+        </div>`;
+        document.body.appendChild(o);
+        document.addEventListener('keydown', _pageGuideEsc);
+    }
+    function closePageGuide() {
+        const o = document.getElementById('pageGuideOverlay');
+        if (o) o.remove();
+        document.removeEventListener('keydown', _pageGuideEsc);
+    }
+    function _pageGuideEsc(e) { if (e.key === 'Escape') closePageGuide(); }
+
+    function toggleHealthDrawer(tabId) {
+        const s = _syncBars[tabId];
+        if (!s) return;
+        s.drawerOpen = !s.drawerOpen;
+        // Re-run checks when opening so the user sees current state, not stale results
+        if (s.drawerOpen) runHealthChecks(tabId);
+        else renderSyncBar(tabId);
+    }
+
+    // Tick freshness display every 15s so "X min ago" stays current without a re-render
+    setInterval(() => {
+        Object.keys(_syncBars).forEach(tabId => {
+            const s = _syncBars[tabId];
+            // Only re-render the chrome bits, not the whole drawer (which would jitter on click)
+            if (!document.querySelector(`[data-sync-bar="${tabId}"]`)) return;
+            const ageMs = s.lastSyncedAt ? Date.now() - s.lastSyncedAt : null;
+            const timeEl = document.querySelector(`[data-sync-bar="${tabId}"] .sync-bar-time`);
+            if (timeEl && !s.isRefreshing && s.lastSyncedAt) {
+                timeEl.textContent = 'Synced ' + _formatAge(ageMs);
+            }
+        });
+    }, 15000);

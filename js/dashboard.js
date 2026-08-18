@@ -1,0 +1,2078 @@
+// ══════════════════════════════════════════
+// LEADERSHIP DASHBOARD — Load Data & Render KPIs
+// ══════════════════════════════════════════
+
+    // ── Stale-while-revalidate cache for instant reloads ──
+    // Uses IndexedDB, not localStorage: the full dataset is ~50MB (7000+ transactions)
+    // which blows through localStorage's 5-10MB quota and silently fails to save.
+    // IndexedDB handles hundreds of MB and stores objects directly (no JSON stringify).
+    // The Supabase clone (index-supabase.html) sets window.__SB_CLONE__ so its cache
+    // is isolated from the live Airtable dashboard (same-origin IndexedDB is shared).
+    const DASH_CACHE_KEY = (typeof window !== 'undefined' && window.__SB_CLONE__) ? '_dlr_dashcache_sb' : '_dlr_dashcache_v2';
+    const DASH_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24h — older than this, don't show stale
+    const IDB_DB_NAME = (typeof window !== 'undefined' && window.__SB_CLONE__) ? '_dlr_cache_sb' : '_dlr_cache';
+    const IDB_STORE = 'kv';
+
+    let _idbPromise = null;
+    function _openIDB() {
+        if (_idbPromise) return _idbPromise;
+        _idbPromise = new Promise((resolve, reject) => {
+            if (!('indexedDB' in window)) { reject(new Error('IDB unsupported')); return; }
+            const req = indexedDB.open(IDB_DB_NAME, 1);
+            req.onupgradeneeded = () => req.result.createObjectStore(IDB_STORE);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+            req.onblocked = () => reject(new Error('IDB open blocked'));
+        });
+        return _idbPromise;
+    }
+
+    function _idbGet(key) {
+        return _openIDB().then(db => new Promise((resolve, reject) => {
+            const tx = db.transaction(IDB_STORE, 'readonly');
+            const req = tx.objectStore(IDB_STORE).get(key);
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+        }));
+    }
+
+    function _idbSet(key, value) {
+        return _openIDB().then(db => new Promise((resolve, reject) => {
+            const tx = db.transaction(IDB_STORE, 'readwrite');
+            tx.objectStore(IDB_STORE).put(value, key);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        }));
+    }
+
+    function _idbDel(key) {
+        return _openIDB().then(db => new Promise((resolve, reject) => {
+            const tx = db.transaction(IDB_STORE, 'readwrite');
+            tx.objectStore(IDB_STORE).delete(key);
+            tx.oncomplete = () => resolve();
+            tx.onerror = () => reject(tx.error);
+        }));
+    }
+
+    async function loadDashCache() {
+        try {
+            const parsed = await _idbGet(DASH_CACHE_KEY);
+            if (!parsed || !parsed.savedAt || !parsed.data) return null;
+            const ageMs = Date.now() - parsed.savedAt;
+            if (ageMs > DASH_CACHE_MAX_AGE_MS) return null;
+            return { data: parsed.data, ageMs };
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async function saveDashCache(data) {
+        try {
+            await _idbSet(DASH_CACHE_KEY, { savedAt: Date.now(), data });
+        } catch (e) {
+            console.warn('Dashboard cache save failed:', e);
+            try { await _idbDel(DASH_CACHE_KEY); } catch (_) {}
+        }
+    }
+
+    async function clearDashCache() {
+        try { await _idbDel(DASH_CACHE_KEY); } catch (_) {}
+        // Also clear the old localStorage cache left over from pre-IDB versions
+        try { localStorage.removeItem(DASH_CACHE_KEY); } catch (_) {}
+    }
+
+    function setRefreshingIndicator(on, ageMs) {
+        const el = document.getElementById('refreshingBadge');
+        if (!el) return;
+        if (on) {
+            const ageLabel = ageMs != null ? formatAge(ageMs) : '';
+            el.innerHTML = '<span class="refresh-dot" style="background:var(--info)"></span>Refreshing\u2026' +
+                (ageLabel ? ' <span style="opacity:0.7">(showing data from ' + ageLabel + ')</span>' : '');
+            el.style.display = 'inline-flex';
+        } else {
+            el.style.display = 'none';
+        }
+    }
+
+    function formatAge(ms) {
+        const mins = Math.round(ms / 60000);
+        if (mins < 1) return 'just now';
+        if (mins < 60) return mins + ' min ago';
+        const hrs = Math.round(mins / 60);
+        if (hrs < 24) return hrs + 'h ago';
+        return Math.round(hrs / 24) + 'd ago';
+    }
+
+    // ── Strategic KPIs (from Projects table) ──
+    // The Projects table lives in the same base as the Task OS. Fields below mirror
+    // the PF constant in os/tasks/index.html. Kept as local constants so this file
+    // stays independent — if you change field IDs, update both.
+    const STRAT_PROJECTS_TABLE = 'tblHrpTMd5LNYn8v1';
+    const STRAT_PF = {
+        name:            'fldiMZICg1KOORpte',
+        status:          'fldZ0SpReVaDS1VXb',
+        start:           'fldGIlsn0cSEpnj18',
+        end:             'fldU0cJparnkvOUsV',
+        completed:       'fldliObR7TdTdjht7',
+        kpiName:         'fldABYFMf2yBKWdlD',
+        kpiTarget:       'fldaI0voHia91SYZz',
+        kpiCurrent:      'fldB1QJDUsukxKzjQ',
+        kpiUnit:         'fldrYZEghROXYf6w0',
+        business:        'fldtdJTFkMtldxEVf',
+        owner:           'fldXUAPrpStGwc2V9',
+        kpiAutomated:    'fldU7tTf8aRgG60wI',
+        kpiSource:       'fldic3mgIRLLu2Sre',
+        kpiLastUpdated:  'fldNk2U74jBxZ6esJ',
+        kpiLastUpdatedBy:'fldIgmO8OqA3a7K5o',
+        kpiComputeCode:  'fldA7vPiLnbgEoKh1',
+        kpiDetailJson:   'fldeGDKEg6HEXCUh4',
+        totalTasks:      'fldtw6NQZ8CSF3RXi',
+        completedTasks:  'fld7IDjY0xB4JGBfn',
+        closedOn:        'fldzGI0ywBTpOK2dy',  // quarter-close date — set = project is history
+    };
+    const STRAT_TEAM_KEYS = {
+        'kevin@runpreneur.org.uk':'kevin',
+        'micaa.work@gmail.com':'mica',
+        'atentaerica@gmail.com':'erica',
+    };
+    let strategicKpiFilter = 'all';
+    let _strategicKpiProjects = [];
+    let _strategicBusinessIdToName = {};
+
+    // Readiness signal for the main dashboard data tables (allTransactions,
+    // allTenancies, allCosts, allBusinesses, allCategories, allSubCategories).
+    // loadStrategicKpis now fires at the top of loadDashboard — BEFORE those
+    // globals are populated — so its Projects fetch + initial render can race
+    // against the main 9-table fetch. But runAutomatedKpis needs those globals
+    // to compute values, so it waits on this promise before starting. Resolved
+    // by markMainDataReady() once either the cache-hit path or the fresh-fetch
+    // path has finished populating the globals.
+    let _mainDataReadyResolve = null;
+    const _mainDataReadyPromise = new Promise(r => { _mainDataReadyResolve = r; });
+    function markMainDataReady() {
+        if (_mainDataReadyResolve) { _mainDataReadyResolve(); _mainDataReadyResolve = null; }
+    }
+    // Exposed so the deep-link handler in shared.js can re-render a cold-loaded tab
+    // once the 9-table fetch has populated the globals. On a cold deep-link to a
+    // non-overview tab (e.g. #costs), switchTab renders the tab on window 'load' —
+    // before this data has arrived — so the tab sticks on its loading state until the
+    // user navigates away and back. Resolves once (first load), which is exactly the
+    // deep-link case; later manual refreshes re-render through their own paths.
+    window.whenMainDataReady = _mainDataReadyPromise;
+
+    function _stratSelName(v){if(!v)return '';if(typeof v==='string')return v;if(typeof v==='object'&&v.name)return v.name;return ''}
+    function _stratDaysAgo(iso){if(!iso)return null;const ms=Date.now()-new Date(iso).getTime();return Math.floor(ms/86400000)}
+    // Health is DERIVED (js/project-health.js), never read from the stored
+    // Project Status. That field is left at Airtable's "Not Started" default
+    // when the Strategy push creates a project, and this function used to
+    // return early on it — so five Q3 2026 projects showed "Not Started" for
+    // 33 days while sitting at 0 of 48 tasks. Deriving it cannot go stale.
+    function _stratComputeHealth(p){
+        if(typeof computeProjectHealth!=='function'){
+            console.error('[dashboard] js/project-health.js not loaded — cannot compute project health');
+            return 'Unknown';
+        }
+        return computeProjectHealth(p);
+    }
+    // Returns a CSS value — uses design tokens so the colour set always stays on-brand.
+    function _stratHealthColour(h){
+        if(h==='On-Target'||h==='Completed'||h==='On-Track')return 'var(--success)';
+        if(h==='Off-Track')return 'var(--danger)';
+        if(h==='Not Started')return 'var(--text-muted)';
+        return 'var(--warning)';
+    }
+
+    async function loadStrategicKpis(){
+        try{
+            // Build business ID→name map from already-loaded businesses
+            // Business name field ID is fldbbRqVxLxUdHwIR (same as used in pnl.js)
+            _strategicBusinessIdToName={};
+            (allBusinesses||[]).forEach(b=>{
+                const name=getField(b,'fldbbRqVxLxUdHwIR');
+                if(name)_strategicBusinessIdToName[b.id]=typeof name==='string'?name:(name.name||'');
+            });
+            const records=await airtableFetch(STRAT_PROJECTS_TABLE);
+            _strategicKpiProjects=records.map(r=>{
+                const ownerObj=getField(r,STRAT_PF.owner);
+                const businessLinks=getField(r,STRAT_PF.business)||[];
+                let businessName='';
+                const businessRecIds=[];
+                if(Array.isArray(businessLinks)){
+                    businessLinks.forEach(b=>{
+                        if(typeof b==='object'){
+                            if(b.id)businessRecIds.push(b.id);
+                            if(!businessName&&b.name)businessName=b.name;
+                        }else if(typeof b==='string'){
+                            businessRecIds.push(b);
+                            if(!businessName)businessName=_strategicBusinessIdToName[b]||'';
+                        }
+                    });
+                }
+                return {
+                    id:r.id,
+                    name:getField(r,STRAT_PF.name)||'(Untitled)',
+                    status:_stratSelName(getField(r,STRAT_PF.status)),
+                    start:getField(r,STRAT_PF.start)||'',
+                    end:getField(r,STRAT_PF.end)||'',
+                    completed:!!getField(r,STRAT_PF.completed),
+                    kpiName:getField(r,STRAT_PF.kpiName)||'',
+                    kpiTarget:Number(getField(r,STRAT_PF.kpiTarget))||0,
+                    kpiCurrent:Number(getField(r,STRAT_PF.kpiCurrent))||0,
+                    kpiUnit:_stratSelName(getField(r,STRAT_PF.kpiUnit)),
+                    business:businessName,
+                    _businessRecIds:businessRecIds,
+                    owner:ownerObj?{name:ownerObj.name||'',email:ownerObj.email||''}:null,
+                    kpiAutomated:!!getField(r,STRAT_PF.kpiAutomated),
+                    kpiSource:getField(r,STRAT_PF.kpiSource)||'',
+                    kpiLastUpdated:getField(r,STRAT_PF.kpiLastUpdated)||'',
+                    kpiLastUpdatedBy:getField(r,STRAT_PF.kpiLastUpdatedBy)||'',
+                    totalTasks:Number(getField(r,STRAT_PF.totalTasks))||0,
+                    completedTasks:Number(getField(r,STRAT_PF.completedTasks))||0,
+                    closedOn:getField(r,STRAT_PF.closedOn)||'',
+                };
+            });
+            // Render immediately with the values already on each project so
+            // the section never disappears while compute runs. Compute writes
+            // back to Airtable in the background and re-renders on completion.
+            renderStrategicKpis();
+            try{
+                await runAutomatedKpis(records);
+                renderStrategicKpis();
+            }catch(e){console.warn('[runAutomatedKpis] failed',e)}
+        }catch(e){console.warn('[loadStrategicKpis] failed',e)}
+    }
+
+    // ─── Automated KPI compute runner (dashboard-side) ──────────────────
+    // Projects with a hand-written compute function body in the
+    // "KPI Compute Code" field get recomputed every time the dashboard
+    // loads. The compute receives a rich ctx including all finance data
+    // (transactions, costs, categories, businesses) so the function can
+    // reason over the whole chart of accounts without fetching anything
+    // itself. Result is PATCHed back to kpiCurrent + kpiLastUpdated on
+    // the project record so both the dashboard and Task OS see it.
+    function buildAutomatedKpiContext(project){
+        // Build ID → name maps from the already-loaded global arrays
+        const bizIdToName={};
+        (allBusinesses||[]).forEach(b=>{
+            const n=getField(b,'fldbbRqVxLxUdHwIR');
+            if(n)bizIdToName[b.id]=typeof n==='string'?n:(n.name||'');
+        });
+        const catIdToName={};
+        (allCategories||[]).forEach(c=>{
+            const n=getField(c,'fldii4oUzSfmplihO');
+            if(n)catIdToName[c.id]=typeof n==='string'?n:(n.name||'');
+        });
+        const subCatIdToName={};
+        (allSubCategories||[]).forEach(sc=>{
+            const n=getField(sc,'fldO4BTJhFv5EsN6i');
+            if(n)subCatIdToName[sc.id]=typeof n==='string'?n:(n.name||'');
+        });
+        const costIdToBiz={};
+        const costIdToInactive={};
+        (allCosts||[]).forEach(co=>{
+            const bizLinks=getField(co,'fldrPjvdFPCKWqeyd')||[];
+            const bizNames=(Array.isArray(bizLinks)?bizLinks:[]).map(x=>typeof x==='object'?x.name||bizIdToName[x.id]||'':bizIdToName[x]||'').filter(Boolean);
+            costIdToBiz[co.id]=bizNames;
+            costIdToInactive[co.id]=!!getField(co,'fldQJPGLFMbwVelsW');
+        });
+        // Tenancy ID → friendly label. Primary field on Tenancies isn't
+        // human-readable, so build "Unit-Ref — Surname" using tenRef +
+        // tenSurname (e.g. "34CR — Smith"). Falls back to whichever is
+        // present, then to the ID.
+        const tenIdToLabel={};
+        const getTenField=(r,fid)=>{
+            const v=r&&r.fields?r.fields[fid]:undefined;
+            if(Array.isArray(v))return v[0]||'';
+            return v||'';
+        };
+        (allTenancies||[]).forEach(tn=>{
+            const ref=String(getTenField(tn,'fldyNVvFn4x8GY14q')||'').trim();
+            const surname=String(getTenField(tn,'fldOXazTqBWieEOK2')||'').trim();
+            let label=ref && surname ? `${ref} — ${surname}` : (ref||surname||'');
+            tenIdToLabel[tn.id]=label||tn.id;
+        });
+        // Simplify transactions into a flat shape the compute function can reason over
+        const txs=(allTransactions||[]).map(tx=>{
+            const bizLinks=getField(tx,'fldX1aFlJyzpXGhbF')||[];
+            const bizNames=(Array.isArray(bizLinks)?bizLinks:[]).map(x=>typeof x==='object'?x.name||bizIdToName[x.id]||'':bizIdToName[x]||'').filter(Boolean);
+            const catLinks=getField(tx,'fldFPmNixqHPQy4D6')||[];
+            const catNames=(Array.isArray(catLinks)?catLinks:[]).map(x=>typeof x==='object'?x.name||catIdToName[x.id]||'':catIdToName[x]||'').filter(Boolean);
+            const subLinks=getField(tx,'fldMRjSVzZVYeHb0A')||[];
+            const subNames=(Array.isArray(subLinks)?subLinks:[]).map(x=>typeof x==='object'?x.name||subCatIdToName[x.id]||'':subCatIdToName[x]||'').filter(Boolean);
+            const costLinks=getField(tx,'fldGkpkVqSeiGvUGL')||[];
+            const costIds=(Array.isArray(costLinks)?costLinks:[]).map(x=>typeof x==='object'?x.id:x).filter(Boolean);
+            const reportAmount=Number(getField(tx,'fldot7iisZeL3WrdR'))||0;
+            const date=getField(tx,'fldoyQ6Rr9cHp3bgQ')||'';
+            const reconciled=!!getField(tx,'fldxKX1IbIFcAOnn5');
+            const vendor=getField(tx,'fld0Xr8sboQ0ekJQJ')||'';
+            const description=getField(tx,'fldsbuAJCTsXHug4C')||'';
+            // Tenancy link (for rental income rows). Resolve each linked-record
+            // id to the friendly "Unit Ref — Surname" label built above.
+            const tenLinks=getField(tx,'fldPmAMmxwqs4SdPa')||[];
+            const tenancyNames=(Array.isArray(tenLinks)?tenLinks:[]).map(x=>{
+                const id=typeof x==='object'?x.id:x;
+                return tenIdToLabel[id]||(typeof x==='object'?(x.name||x.id):x)||'';
+            }).filter(Boolean);
+            return {
+                id:tx.id,
+                date:(date||'').slice(0,10),
+                amount:reportAmount, // SIGNED: +ve = money in, −ve = money out
+                reconciled,
+                vendor: typeof vendor==='string'?vendor:(vendor&&vendor.name)||'',
+                description: typeof description==='string'?description:'',
+                businesses:bizNames,
+                categories:catNames,
+                subCategories:subNames,
+                costIds,
+                hasCost:costIds.length>0,
+                tenancies:tenancyNames,
+            };
+        });
+        return {
+            today:new Date().toISOString().slice(0,10),
+            project:{
+                id:project.id,
+                name:project.name||'',
+                start:project.start||'',
+                end:project.end||'',
+                business:project.business||'',
+                kpiTarget:project.kpiTarget||0,
+                kpiUnit:project.kpiUnit||'',
+            },
+            transactions:txs,
+            costs:(allCosts||[]).map(co=>({
+                id:co.id,
+                name:getField(co,'fldS6FYfpkhu6tJG0')||'',
+                businesses:costIdToBiz[co.id]||[],
+                inactive:!!costIdToInactive[co.id],
+            })),
+            // Helpers
+            between(iso, startIso, endIso){
+                if(!iso)return false;
+                const d=String(iso).slice(0,10);
+                return (!startIso||d>=startIso)&&(!endIso||d<=endIso);
+            },
+            addDays(iso, days){
+                if(!iso)return '';
+                const [y,m,d]=iso.slice(0,10).split('-').map(Number);
+                const dt=new Date(Date.UTC(y,m-1,d+days));
+                return dt.toISOString().slice(0,10);
+            },
+            monthRange(iso){
+                const d=(iso||new Date().toISOString()).slice(0,10);
+                const [y,m]=d.split('-').map(Number);
+                const start=`${y}-${String(m).padStart(2,'0')}-01`;
+                const lastDay=new Date(Date.UTC(y,m,0)).getUTCDate();
+                const end=`${y}-${String(m).padStart(2,'0')}-${String(lastDay).padStart(2,'0')}`;
+                return {start,end};
+            },
+            sumBy(arr,fn){return (arr||[]).reduce((s,x)=>s+(+fn(x)||0),0)},
+            countWhere(arr,fn){return (arr||[]).filter(fn).length},
+        };
+    }
+
+    // Compute-code denylist. Defence in depth — the real containment is that
+    // every dangerous global is shadowed as an undefined parameter below.
+    //
+    // A bare backtick used to be banned outright. That silently killed every
+    // KPI whose code used an ordinary template literal, including one whose
+    // only backtick was inside a COMMENT ("`total` is returned so..."). Five
+    // compute scripts were blocked this way from 6 May to 9 Aug 2026 and
+    // nobody saw it, because a blocked script failed without saying so.
+    //
+    // Banning backticks never closed the hole it looked aimed at either:
+    // identifiers assembled from ordinary quotes — obj["cons"+"tructor"] —
+    // sailed straight through. So the backtick rule is replaced by one that
+    // targets the actual escape: a computed member access whose key is BUILT
+    // rather than written literally. tx["date"] and arr[i+1] still pass;
+    // obj["cons"+"tructor"] and obj[`${x}`] do not.
+    //
+    // The runs are BOUNDED ({0,120}, no newlines) for two reasons. Unbounded
+    // [^\]]* nests into roughly O(n^3): 5,000 brackets against 5,000 quotes
+    // measured at 90 SECONDS on the main thread, which hangs the tab rather
+    // than just the KPI. And [^\]] matches newlines, so a stray "[" in a
+    // comment poisoned every line after it — the same shape as the backtick-in-
+    // a-comment fault this replaces.
+    //
+    // KNOWN FALSE POSITIVE: a key concatenated inline — m[y+'-'+mm] — is
+    // blocked, and month bucketing is common here. Build the key on its own
+    // line (const k = y+'-'+mm; m[k]) and it passes. It now fails LOUDLY with
+    // a "Compute failed" badge, which is the difference that matters.
+    //
+    // Honest limit: this is a speed bump, not a wall. An identifier assembled
+    // from ordinary quotes on a preceding line defeats it, and always did —
+    // Function, eval and constructor are not among the shadowed parameters.
+    // The SECURITY note below still stands: server-side execution is required
+    // before any multi-tenant rollout.
+    const _KPI_BLOCKED = /\b(fetch|XMLHttpRequest|WebSocket|EventSource|importScripts|import|require|eval|Function|constructor|document|window|self|globalThis|top|parent|frames|opener|localStorage|sessionStorage|navigator|location|cookie|postMessage|Worker|ServiceWorker)\b|["'`]\s*\[|\[[^\]\n]{0,120}["'`][^\]\n]{0,120}(?:\+|\$\{)/;
+    // Records WHY a compute failed on the ctx, so the caller can show it.
+    // Returning a bare null told nobody anything: a blocked or broken KPI was
+    // indistinguishable from one that had simply never run, and stayed blank
+    // on the dashboard for three months.
+    function runKpiComputeCode(code, ctx){
+        if(ctx)ctx._kpiError=null;
+        if(!code||!String(code).trim())return null;
+        if(_KPI_BLOCKED.test(code)){
+            const msg='Compute code rejected by the safety check — it contains a blocked pattern.';
+            console.error('[runKpiComputeCode] '+msg);
+            if(ctx)ctx._kpiError=msg;
+            return null;
+        }
+        try{
+            // SECURITY: this executes founder-authored compute code from the
+            // Projects table (ctx-only maths over the loaded finance data).
+            // Acceptable single-tenant only — the author already controls the
+            // deployment. MUST be replaced with server-side execution before
+            // any multi-tenant rollout. The extra parameters shadow dangerous
+            // globals so even code that slips past the denylist sees undefined.
+            // eslint-disable-next-line no-new-func
+            const fn=new Function('ctx','PAT','fetch','localStorage','sessionStorage','document','window','self','globalThis','top','parent','frames','opener','XMLHttpRequest','WebSocket','EventSource','importScripts','"use strict";'+code);
+            const v=fn.call(null,ctx);
+            if(typeof v==='number'&&isFinite(v))return v;
+            if(typeof v==='string'){const n=parseFloat(v);if(!isNaN(n))return n}
+            // If the function returns an object (e.g. { rolling, months }), stash it
+            // on the project record so renderStrategicKpis can pick a specific value
+            // for display. Return the primary value field for kpiCurrent.
+            if(v&&typeof v==='object'){
+                ctx._lastKpiDetail=v;
+                const primary=v.value??v.primary??v.rolling??v.current??null;
+                if(typeof primary==='number'&&isFinite(primary))return primary;
+            }
+            const msg='Compute code ran but did not return a number.';
+            console.error('[runKpiComputeCode] '+msg);
+            if(ctx)ctx._kpiError=msg;
+            return null;
+        }catch(e){
+            const msg='Compute code failed: '+(e&&e.message?e.message:String(e));
+            console.error('[runKpiComputeCode] '+msg,e);
+            if(ctx)ctx._kpiError=msg;
+            return null;
+        }
+    }
+
+    // Fetch a slim view of every task — just the fields we need for
+    // Slim view of every prospect, for funnel KPIs. Same lazy pattern as the task
+    // fetch: only pulled when automated KPIs actually run. Status is the whole
+    // funnel — Found → Ready for Review → Approved → Synced to GHL → In Sequence →
+    // Replied → Call Booked — so a compute function can count any stage it wants.
+    async function fetchProspectsForKpi(){
+        try{
+            const url=`https://api.airtable.com/v0/${BASE_ID}/${TABLES.prospects}?returnFieldsByFieldId=true&pageSize=100&fields[]=fldNFSZrPsUF1NAd1&fields[]=fldSoTbvGYRI2R0bq&fields[]=fld2cltR75W6DYQuB&fields[]=fld18VDzR2Iu1m2qt`;
+            let all=[],offset=null;
+            do{
+                const r=await fetch(url+(offset?'&offset='+offset:''),{headers:{Authorization:`Bearer ${PAT}`}});
+                if(!r.ok)throw new Error('prospects fetch '+r.status);
+                const j=await r.json();
+                all=all.concat(j.records||[]);
+                offset=j.offset;
+            }while(offset);
+            return all.map(p=>{
+                const c=p.fields||{};
+                const s=c['fldNFSZrPsUF1NAd1'];
+                const status=typeof s==='string'?s:(s&&s.name)||'';
+                const route=c['fld18VDzR2Iu1m2qt'];
+                return {
+                    id:p.id,
+                    status,
+                    dateFound:c['fldSoTbvGYRI2R0bq']||'',
+                    ghlContactId:c['fld2cltR75W6DYQuB']||'',
+                    contactRoute:typeof route==='string'?route:(route&&route.name)||'',
+                };
+            });
+        }catch(e){console.warn('[fetchProspectsForKpi] failed',e);return []}
+    }
+
+    // task-completion style KPIs. Only called when the dashboard runs
+    // automated KPIs, so it doesn't add load to unrelated refreshes.
+    async function fetchTasksForKpi(){
+        try{
+            const url=`https://api.airtable.com/v0/${BASE_ID}/${TABLES.tasks}?returnFieldsByFieldId=true&pageSize=100&fields[]=fldx4qCw17UfrKpaN&fields[]=fldBg0rQy0FrOAkRN&fields[]=fldFOi1SwEKuJRmdN&fields[]=fldgFjGBw6bTKJFCD&fields[]=fld7XP8w8kbxfETV4`;
+            let all=[],offset=null;
+            do{
+                const r=await fetch(url+(offset?'&offset='+offset:''),{headers:{Authorization:`Bearer ${PAT}`}});
+                if(!r.ok)throw new Error('tasks fetch '+r.status);
+                const d=await r.json();all=all.concat(d.records||[]);offset=d.offset||null;
+            }while(offset);
+            return all.map(t=>{
+                const c=t.cellValuesByFieldId||t.fields||{};
+                const statusObj=c['fldx4qCw17UfrKpaN'];
+                const status=typeof statusObj==='string'?statusObj:(statusObj&&statusObj.name)||'';
+                const projLinks=c['fldBg0rQy0FrOAkRN']||[];
+                const projectIds=(Array.isArray(projLinks)?projLinks:[]).map(x=>typeof x==='object'?x.id:x).filter(Boolean);
+                return {
+                    id:t.id,
+                    name:c['fldgFjGBw6bTKJFCD']||'',
+                    status,
+                    completed:status==='Completed',
+                    projectIds,
+                    completion:c['fldFOi1SwEKuJRmdN']||'',
+                    dueDate:c['fld7XP8w8kbxfETV4']||'',
+                };
+            });
+        }catch(e){console.warn('[fetchTasksForKpi] failed',e);return []}
+    }
+    async function runAutomatedKpis(projectRecords){
+        if(!Array.isArray(projectRecords))return;
+        const withCode=projectRecords.filter(r=>{
+            // Skip closed quarters. Recomputing them burns time and lets a closed
+            // project's KPI Current drift away from the KPI at Close snapshot.
+            if(getField(r,STRAT_PF.closedOn))return false;
+            const code=getField(r,STRAT_PF.kpiComputeCode);
+            return code && String(code).trim();
+        });
+        if(!withCode.length)return;
+        // The compute code reads from allTransactions / allTenancies / allCosts
+        // / allBusinesses / allCategories / allSubCategories. Wait for those to
+        // be populated before computing (they're set by either the cache-hit
+        // render or the fresh-fetch success path in loadDashboard).
+        await _mainDataReadyPromise;
+        // Fetch the task list once for any project KPI that needs it.
+        const tasksForKpi=await fetchTasksForKpi();
+        const prospectsForKpi=await fetchProspectsForKpi();
+        // Run all computes synchronously, updating local state per project so the
+        // caller can renderStrategicKpis() with fresh values right away. PATCHes
+        // to Airtable fire in the background (fire-and-forget) — they used to be
+        // awaited sequentially, costing N × ~500ms on the critical path for data
+        // the UI already had locally. Persisting to Airtable is housekeeping so
+        // the next session's initial (pre-compute) render shows today's numbers.
+        for(const rec of withCode){
+            try{
+                const code=getField(rec,STRAT_PF.kpiComputeCode);
+                const local=_strategicKpiProjects.find(p=>p.id===rec.id)||{
+                    id:rec.id,
+                    name:getField(rec,STRAT_PF.name)||'',
+                    start:getField(rec,STRAT_PF.start)||'',
+                    end:getField(rec,STRAT_PF.end)||'',
+                    kpiTarget:Number(getField(rec,STRAT_PF.kpiTarget))||0,
+                    kpiUnit:_stratSelName(getField(rec,STRAT_PF.kpiUnit)),
+                };
+                const ctx=buildAutomatedKpiContext(local);
+                ctx.tasks=tasksForKpi;
+                ctx.prospects=prospectsForKpi;
+                let value=runKpiComputeCode(code,ctx);
+                if(value==null){
+                    // Carry the reason onto the project so the row can show a
+                    // fault instead of an empty cell that looks like "no data
+                    // yet". A KPI that cannot compute is a broken KPI, and the
+                    // founder is acting on these numbers.
+                    local.kpiComputeError=ctx._kpiError||'Compute code produced no value.';
+                    continue;
+                }
+                local.kpiComputeError=null;
+                // The compute code already handles DD reversals correctly
+                // in its totals (costs += -amt). No recalculation needed.
+                const rounded=Math.round(value*100)/100;
+                local.kpiCurrent=rounded;
+                local.kpiReturn=ctx._lastKpiDetail||null;
+                local.kpiDetail=ctx._lastKpiDetail||null;
+                local.kpiLastUpdated=new Date().toISOString();
+                let who='Leadership Dashboard';
+                try{if(typeof currentUser!=='undefined'&&currentUser&&(currentUser.name||currentUser.email))who=currentUser.name||currentUser.email}catch(e){}
+                local.kpiLastUpdatedBy=who;
+
+                // Fire-and-forget Airtable persist.
+                (async ()=>{
+                    try{
+                        const payload={};
+                        payload[STRAT_PF.kpiCurrent]=rounded;
+                        payload[STRAT_PF.kpiLastUpdated]=local.kpiLastUpdated;
+                        payload[STRAT_PF.kpiLastUpdatedBy]=local.kpiLastUpdatedBy;
+                        // Serialize the full compute return (months + detail) so
+                        // the Task OS can read the same drilldown without re-
+                        // fetching transactions. Cap at ~95KB to stay under
+                        // Airtable's 100,000-char long-text limit.
+                        try{
+                            let json=JSON.stringify(ctx._lastKpiDetail||{});
+                            const CAP=95000;
+                            if(json.length>CAP){
+                                const obj=ctx._lastKpiDetail||{};
+                                if(obj.detail){
+                                    for(const size of [40,25,15,5]){
+                                        if(obj.detail.rolling){
+                                            obj.detail.rolling.revTxs=(obj.detail.rolling.revTxs||[]).slice(0,size);
+                                            obj.detail.rolling.costTxs=(obj.detail.rolling.costTxs||[]).slice(0,size);
+                                        }
+                                        if(obj.detail.monthsDetail){
+                                            Object.keys(obj.detail.monthsDetail).forEach(k=>{
+                                                obj.detail.monthsDetail[k].revTxs=(obj.detail.monthsDetail[k].revTxs||[]).slice(0,size);
+                                                obj.detail.monthsDetail[k].costTxs=(obj.detail.monthsDetail[k].costTxs||[]).slice(0,size);
+                                            });
+                                        }
+                                        json=JSON.stringify(obj);
+                                        if(json.length<=CAP)break;
+                                    }
+                                }
+                                if(json.length>CAP){
+                                    json=JSON.stringify({value:obj.value,rolling:obj.rolling,months:obj.months});
+                                }
+                            }
+                            payload[STRAT_PF.kpiDetailJson]=json;
+                        }catch(e){console.warn('[runAutomatedKpis] stringify failed',e)}
+                        const url=`https://api.airtable.com/v0/${BASE_ID}/${STRAT_PROJECTS_TABLE}/${rec.id}?returnFieldsByFieldId=true`;
+                        const resp=await fetch(url,{
+                            method:'PATCH',
+                            headers:{'Authorization':`Bearer ${PAT}`,'Content-Type':'application/json'},
+                            body:JSON.stringify({fields:payload,typecast:true}),
+                        });
+                        if(!resp.ok)console.warn('[runAutomatedKpis] PATCH',rec.id,'returned',resp.status);
+                    }catch(e){console.warn('[runAutomatedKpis] PATCH failed for',rec.id,e)}
+                })();
+            }catch(e){console.warn('[runAutomatedKpis] per-project error',e)}
+        }
+    }
+
+    function renderStrategicKpis(){
+        const section=document.getElementById('strategicKpiSection');
+        const list=document.getElementById('strategicKpiList');
+        const pills=document.getElementById('strategicKpiPills');
+        const countEl=document.getElementById('strategicKpiCount');
+        if(!section||!list||!pills)return;
+        // Re-resolve empty business names — on the first render allBusinesses
+        // may not have loaded yet, so the ID→name map was empty. By the second
+        // render (after compute) the globals are populated.
+        if(allBusinesses&&allBusinesses.length&&Object.keys(_strategicBusinessIdToName).length===0){
+            allBusinesses.forEach(b=>{
+                const name=getField(b,'fldbbRqVxLxUdHwIR');
+                if(name)_strategicBusinessIdToName[b.id]=typeof name==='string'?name:(name.name||'');
+            });
+        }
+        if(Object.keys(_strategicBusinessIdToName).length>0){
+            _strategicKpiProjects.forEach(p=>{
+                if(p.business||!p._businessRecIds)return;
+                const id=p._businessRecIds[0];
+                if(id&&_strategicBusinessIdToName[id])p.business=_strategicBusinessIdToName[id];
+            });
+        }
+        // A project that closed having MISSED its target is still "Off-Track", not "Completed",
+        // so status alone never retires it and it sits here as a live KPI forever. `Closed On`
+        // is written by the quarter-close routine and is the only reliable "this is history"
+        // signal — see Decisions/2026-07-31 Q3 planning, rule 8.
+        const active=_strategicKpiProjects.filter(p=>p.kpiName&&!p.completed&&p.status!=='Completed'&&!p.closedOn);
+        if(!active.length){section.style.display='none';return}
+        section.style.display='block';
+
+        // Filter pills — match the sage-executive token palette used on the rest of the page.
+        // Active businesses come from Airtable so deactivating a business hides its filter pill.
+        const activeBizNames=getActiveBusinesses()
+            .map(b=>String(getField(b,BIZ_NAME_FIELD)||''))
+            .filter(Boolean)
+            .sort((a,b)=>a.localeCompare(b));
+        const filters=['all',...activeBizNames];
+        // Business names are user data — never inline them into onclick handlers
+        // (a name containing a quote would escape the attribute). Render each pill
+        // with an escHtml'd data-filter attribute and use one delegated listener.
+        pills.innerHTML=filters.map(f=>{
+            const label=f==='all'?'All':f;
+            const isActive=strategicKpiFilter===f;
+
+            return `<button data-filter="${escHtml(f)}" class="od-filter-pill${isActive?' active':''}">${escHtml(label)}</button>`;
+        }).join('');
+        if(!pills.dataset.filterWired){
+            pills.dataset.filterWired='1';
+            pills.addEventListener('click',e=>{
+                const btn=e.target.closest('button[data-filter]');
+                if(btn)setStrategicKpiFilter(btn.dataset.filter);
+            });
+        }
+
+        let filtered=active.slice();
+        if(strategicKpiFilter!=='all')filtered=filtered.filter(p=>p.business===strategicKpiFilter);
+        countEl.textContent=`· ${filtered.length} active KPI${filtered.length!==1?'s':''}`;
+
+        if(!filtered.length){list.innerHTML=`<div style="padding:20px;text-align:center;color:var(--text-secondary);background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius-lg)">No active KPIs for this business.</div>`;list.style.cssText='';return}
+
+        // Row layout: Project+Business | Owner | KPI | Current / Target | Progress | Status | Updated
+        // Project name can wrap to two lines; the business pill sits underneath it for at-a-glance context.
+        list.innerHTML=filtered.map(p=>{
+            const health=_stratComputeHealth(p);
+            const healthColor=_stratHealthColour(health);
+            const pct=p.kpiTarget>0?Math.min(100,(p.kpiCurrent/p.kpiTarget)*100):0;
+            const unitPrefix=p.kpiUnit==='£'?'£':'';
+            const unitSuffix=['%','count','days','items','hours'].includes(p.kpiUnit)?' '+p.kpiUnit:'';
+            const ownerChip=(()=>{
+                if(!p.owner||!p.owner.email)return '<span style="font-size:var(--fs-xs);color:var(--text-muted)">No owner</span>';
+                const k=STRAT_TEAM_KEYS[p.owner.email]||'';
+                const initials=(p.owner.name||'?').split(' ').map(w=>w[0]).join('').slice(0,2);
+                return `<span class="avatar avatar-${k}" style="width:22px;height:22px;font-size:10px;display:inline-flex;align-items:center;justify-content:center;border-radius:50%" title="${escHtml(p.owner.name||'')}">${escHtml(initials)}</span>`;
+            })();
+            // Business pill — sits under the project name, same spirit as category chips elsewhere.
+            const businessPill=p.business
+                ? `<span class="od-status-badge neutral" style="letter-spacing:0.01em">${escHtml(p.business)}</span>`
+                : `<span style="display:inline-block;font-size:var(--fs-xs);color:var(--text-muted);font-style:italic">No business</span>`;
+            // Staleness / auto indicator — now uses success/danger/text tokens.
+            let stamp='';
+            if(p.kpiComputeError){
+                // A green "Auto" badge on a KPI whose compute is dead is worse
+                // than no badge — it says the number is maintaining itself when
+                // it is not. Two of these sat blank behind an "Auto" badge for
+                // three months.
+                stamp=`<span title="${escHtml(p.kpiComputeError)}" style="font-size:10px;font-weight:var(--fw-semibold);color:var(--danger);background:var(--danger-bg);padding:2px 6px;border-radius:var(--radius-sm)">Compute failed</span>`;
+            }else if(p.kpiAutomated){
+                stamp=`<span style="font-size:10px;font-weight:var(--fw-semibold);color:var(--accent);background:var(--accent-soft);padding:2px 6px;border-radius:var(--radius-sm)">Auto</span>`;
+            }else{
+                const days=_stratDaysAgo(p.kpiLastUpdated);
+                if(days===null)stamp=`<span style="font-size:var(--fs-xs);color:var(--danger);font-weight:var(--fw-semibold)">Never updated</span>`;
+                else if(days>7)stamp=`<span style="font-size:var(--fs-xs);color:var(--danger);font-weight:var(--fw-semibold)">${days}d stale</span>`;
+                else stamp=`<span style="font-size:var(--fs-xs);color:var(--text-secondary)">${days<1?'today':days===1?'1d ago':days+'d ago'}</span>`;
+            }
+            // Optional month-by-month breakdown from kpiReturn.months.
+            const kRet=p.kpiReturn||p.kpiDetail||null;
+            const hasMonths=!!(kRet&&kRet.months&&Object.keys(kRet.months).length);
+            const hasDetail=!!(kRet&&kRet.detail);
+            let monthsRow='';
+            if(hasMonths){
+                const monthNames={'01':'Jan','02':'Feb','03':'Mar','04':'Apr','05':'May','06':'Jun','07':'Jul','08':'Aug','09':'Sep','10':'Oct','11':'Nov','12':'Dec'};
+                const cells=Object.keys(kRet.months).sort().map(k=>{
+                    const [,mm]=k.split('-');const label=monthNames[mm]||k;
+                    const v=kRet.months[k];
+                    const hit=p.kpiTarget>0&&v>=p.kpiTarget;
+                    const clickable=hasDetail&&kRet.detail.monthsDetail&&kRet.detail.monthsDetail[k];
+                    const onclick=clickable?`onclick="toggleStratKpiDrill('${p.id}','${k}');event.stopPropagation();event.preventDefault();return false"`:'';
+                    const cursor=clickable?'cursor:pointer;':'';
+                    const hitBg=hit?'var(--success-bg)':'var(--bg-surface-2)';
+                    const hitColor=hit?'var(--success)':'var(--text-secondary)';
+                    return `<span ${onclick} style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;background:${hitBg};color:${hitColor};border-radius:var(--radius-full);font-size:var(--fs-xs);font-variant-numeric:tabular-nums;${cursor}" title="${clickable?'Click to see the transactions':''}"><b>${label}</b> ${unitPrefix}${(v||0).toLocaleString('en-GB')}${unitSuffix}</span>`;
+                }).join(' ');
+                const totalClick=hasDetail?`<button onclick="toggleStratKpiDrill('${p.id}','rolling');event.stopPropagation();event.preventDefault();return false" class="od-btn od-btn-secondary od-btn-sm" style="margin-left:6px">Rolling 31d ▾</button>`:'';
+                monthsRow=`<div style="grid-column:1/-1;padding:0 14px 10px 14px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-top:none;border-bottom:none;font-size:var(--fs-xs);color:var(--text-secondary)"><span style="margin-right:6px;color:var(--text-muted)">Per month:</span>${cells}${totalClick}</div>`;
+            }
+            // Drilldown container (hidden until toggled)
+            const drillId=`stratKpiDrill-${p.id}`;
+            const drillRow=`<div id="${drillId}" data-expanded="" style="display:none;grid-column:1/-1;padding:14px;background:var(--bg-surface-2);border:1px solid var(--border-subtle);border-top:none;border-bottom:none;font-size:var(--fs-sm)"></div>`;
+            return `<div class="strat-kpi-row" data-project-id="${p.id}" style="display:grid;grid-template-columns:2.2fr 32px 2fr 1.3fr 110px 96px 96px;gap:12px;align-items:start;padding:12px 14px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-bottom:none;font-size:var(--fs-base);${hasDetail?'cursor:pointer':''};transition:background var(--dur-fast) var(--ease)" ${hasDetail?`onclick="toggleStratKpiDrill('${p.id}','rolling')"`:''} onmouseover="this.style.background='var(--bg-surface-2)'" onmouseout="this.style.background='var(--bg-surface)'">
+                <div style="display:flex;flex-direction:column;gap:4px;min-width:0">
+                    <div style="font-weight:var(--fw-semibold);color:var(--text-primary);line-height:1.35;word-break:break-word">${escHtml(p.name)}</div>
+                    ${businessPill}
+                </div>
+                <div style="text-align:center;padding-top:2px">${ownerChip}</div>
+                <div style="color:var(--text-secondary);line-height:1.35;word-break:break-word;padding-top:2px" title="${escHtml(p.kpiName)}">${escHtml(p.kpiName)}</div>
+                <div style="color:var(--text-primary);font-variant-numeric:tabular-nums;padding-top:2px">${unitPrefix}${p.kpiCurrent.toLocaleString('en-GB')}${unitSuffix} <span style="color:var(--text-muted)">/ ${unitPrefix}${p.kpiTarget.toLocaleString('en-GB')}${unitSuffix}</span></div>
+                <div class="od-progress" style="margin-top:6px"><div class="od-progress-fill" style="width:${pct}%;background:${healthColor}"></div></div>
+                <div style="font-size:var(--fs-xs);font-weight:var(--fw-semibold);color:${healthColor};text-align:center;padding-top:2px">${escHtml(health)}</div>
+                <div style="text-align:right;padding-top:2px">${stamp}</div>
+            </div>${monthsRow}${drillRow}`;
+        }).join('')+`<div style="height:1px;background:var(--border-subtle)"></div>`;
+        // Rounded wrapper around the whole stack.
+        list.style.cssText='border-radius:var(--radius-lg);overflow:hidden;border:1px solid var(--border-default);box-shadow:var(--shadow-sm)';
+    }
+
+    function setStrategicKpiFilter(f){strategicKpiFilter=f;renderStrategicKpis()}
+    window.setStrategicKpiFilter=setStrategicKpiFilter;
+
+    // Expand/collapse a project's KPI drilldown showing the transactions
+    // that made up the calculation. bucket = 'rolling' | 'YYYY-MM'
+    function toggleStratKpiDrill(pid, bucket){
+        const p=_strategicKpiProjects.find(x=>x.id===pid);if(!p)return;
+        const kRet=p.kpiReturn||p.kpiDetail;
+        if(!kRet||!kRet.detail)return;
+        const el=document.getElementById(`stratKpiDrill-${pid}`);if(!el)return;
+        const currentKey=el.getAttribute('data-expanded');
+        const newKey=(currentKey===bucket)?'':bucket;
+        if(!newKey){el.style.display='none';el.setAttribute('data-expanded','');return}
+        let detail=null, label='';
+        if(bucket==='rolling'){detail=kRet.detail.rolling;label='Rolling 31 days'}
+        else if(kRet.detail.monthsDetail&&kRet.detail.monthsDetail[bucket]){
+            detail=kRet.detail.monthsDetail[bucket];
+            const [y,m]=bucket.split('-');
+            const monthNames={'01':'January','02':'February','03':'March','04':'April','05':'May','06':'June','07':'July','08':'August','09':'September','10':'October','11':'November','12':'December'};
+            label=`${monthNames[m]||m} ${y}`;
+        }
+        if(!detail){el.style.display='none';return}
+        // The compute code already handles reversals correctly in its totals.
+        // Only recalculate from costTxs/revTxs when the list is NOT truncated,
+        // because truncated lists are capped at MAX_TX (60) and would undercount.
+        // Task-completion KPIs have no transactions — render a tasks list instead.
+        const displayHint0=(kRet&&kRet.display)||{};
+        if(displayHint0.kind==='taskCompletion'){
+            const done=detail.completedTasks||[];
+            const open=detail.outstandingTasks||[];
+            const row=t=>`<tr style="border-top:1px solid var(--border-subtle)"><td style="padding:6px 8px;color:var(--text-primary)">${escHtml(t.name||'(Untitled)')}</td><td style="padding:6px 8px;font-size:11px;color:var(--text-secondary)">${escHtml(t.status||'')}</td><td style="padding:6px 8px;font-family:ui-monospace,Menlo,monospace;font-size:11px;color:var(--text-secondary)">${escHtml((t.dueDate||t.completion||'').slice(0,10))}</td></tr>`;
+            const table=(title,list,color)=>`<div style="margin-top:8px;padding:10px;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:6px">
+                <div style="font-weight:600;color:${color};margin-bottom:6px">${title} · ${list.length} task${list.length===1?'':'s'}</div>
+                ${list.length?`<table class="od-table"><thead><tr><th>Task</th><th>Status</th><th>Date</th></tr></thead><tbody>${list.map(row).join('')}</tbody></table>`:'<div style="color:var(--text-muted);font-style:italic;font-size:12px">None</div>'}
+            </div>`;
+            el.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <div><strong>${escHtml(label)}</strong> · ${escHtml(detail.label||'')}</div>
+                <button onclick="toggleStratKpiDrill('${pid}','${bucket}')" class="od-btn od-btn-outline">Close ▴</button>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:10px">
+                <div style="padding:10px;background:var(--success-bg);border-radius:6px"><div style="font-size:10px;color:var(--accent-hover);font-weight:600;text-transform:uppercase">Completed</div><div style="font-size:16px;font-weight:700;color:var(--accent-hover)">${detail.completedCount||0}</div></div>
+                <div style="padding:10px;background:var(--danger-bg);border-radius:6px"><div style="font-size:10px;color:var(--danger);font-weight:600;text-transform:uppercase">Outstanding</div><div style="font-size:16px;font-weight:700;color:var(--danger)">${detail.outstandingCount||0}</div></div>
+                <div style="padding:10px;background:var(--info-bg);border-radius:6px"><div style="font-size:10px;color:var(--info);font-weight:600;text-transform:uppercase">Total</div><div style="font-size:16px;font-weight:700;color:var(--info)">${detail.total||0}</div></div>
+              </div>
+              ${table('Completed',done,'var(--accent-hover)')}
+              ${table('Outstanding',open,'var(--danger)')}`;
+            el.style.display='block';el.setAttribute('data-expanded',bucket);
+            return;
+        }
+        const unitPrefix=p.kpiUnit==='£'?'£':'';
+        const fmtAmt=n=>`${unitPrefix}${(n||0).toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+        const fmtSigned=n=>{
+            const num=Number(n)||0;
+            const abs=Math.abs(num);
+            const str=`${unitPrefix}${abs.toLocaleString('en-GB',{minimumFractionDigits:2,maximumFractionDigits:2})}`;
+            return num<0?`<span style="color:var(--danger)">−${str}</span>`:str;
+        };
+        // Determine column layout for revenue rows from the compute output's
+        // display hint (if any). Default: Date / Tenancy / Description / Amount.
+        // For MRR-style KPIs the compute can set display.revenueColumns to
+        // ['date','description','amount'] to drop the Tenancy column.
+        const displayHint=(kRet&&kRet.display)||{};
+        const txTable=(title,list,color,kind)=>{
+            const columns=(kind==='revenue'&&displayHint.revenueColumns)
+                ? displayHint.revenueColumns
+                : ['date', kind==='revenue'?'tenancy':'cost', 'description', 'amount'];
+            const headerFor={date:'Date',tenancy:'Tenancy',cost:'Cost',description:'Description',amount:'Amount'};
+            if(!list||!list.length)return `<div style="margin-top:8px;padding:8px;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:6px;color:var(--text-muted);font-style:italic">No ${title.toLowerCase()} transactions in this window</div>`;
+            const rows=list.map(t=>{
+                const isReversal=kind==='revenue'?t.amount<0:t.amount>0;
+                const rowBg=isReversal?'background:var(--gold-100)':'';
+                const reversalTag=isReversal?'<span class="od-status-badge warning" style="margin-right:4px">REVERSAL</span>':'';
+                const cellFor=(col,isFirst)=>{
+                    const tag=isFirst?reversalTag:'';
+                    if(col==='date')return `<td style="padding:6px 8px;white-space:nowrap;color:var(--text-secondary);font-family:ui-monospace,Menlo,monospace;font-size:11px">${escHtml(t.date||'')}</td>`;
+                    if(col==='tenancy')return `<td style="padding:6px 8px;color:var(--text-primary)">${tag}${escHtml(t.tenancy||t.vendor||'-')}</td>`;
+                    if(col==='cost')return `<td style="padding:6px 8px;color:var(--text-primary)">${tag}${escHtml(t.cost||t.vendor||'-')}</td>`;
+                    if(col==='description')return `<td style="padding:6px 8px;color:var(--text-primary)">${tag}${escHtml((t.description||'').slice(0,120))}</td>`;
+                    if(col==='amount')return `<td style="padding:6px 8px;text-align:right;font-variant-numeric:tabular-nums;color:var(--text-primary)">${fmtSigned(t.amount)}</td>`;
+                    return '<td></td>';
+                };
+                return `<tr style="border-top:1px solid var(--border-subtle);${rowBg}">${columns.map((c,i)=>cellFor(c,i===1)).join('')}</tr>`;
+            }).join('');
+            // Use the authoritative total from the compute (detail.costs/revenue)
+            // rather than recalculating from the visible rows, which may be
+            // truncated (capped at 60 per bucket).
+            const totalCount=kind==='revenue'?(detail.revCount||list.length):(detail.costCount||list.length);
+            const authTotal=kind==='revenue'?(detail.revenue||0):(detail.costs||0);
+            const isTruncated=totalCount>list.length;
+            const truncNote=isTruncated?` <span class="od-text-muted-sm">(showing ${list.length} of ${totalCount})</span>`:'';
+            return `<div style="margin-top:8px;padding:10px;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:6px">
+                <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px">
+                    <div style="font-weight:600;color:${color}">${title} · ${totalCount} tx · Total ${fmtAmt(authTotal)}${truncNote}</div>
+                </div>
+                <table class="od-table">
+                    <thead><tr>
+                        ${columns.map(c=>`<th style="${c==='amount'?'text-align:right':''}">${headerFor[c]||c}</th>`).join('')}
+                    </tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>`;
+        };
+        el.innerHTML=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+                <div><strong>${escHtml(label)}</strong> · Window: ${escHtml(detail.windowStart||'-')} → ${escHtml(detail.windowEnd||'-')}</div>
+                <button onclick="toggleStratKpiDrill('${pid}','${bucket}')" class="od-btn od-btn-outline">Close ▴</button>
+            </div>
+            <div style="display:grid;grid-template-columns:${displayHint.hideCosts?'1fr':'1fr 1fr 1fr'};gap:10px;margin-bottom:10px">
+                <div style="padding:10px;background:var(--success-bg);border-radius:6px"><div style="font-size:10px;color:var(--accent-hover);font-weight:600;text-transform:uppercase">${escHtml(displayHint.revenueLabel||'Revenue')}</div><div style="font-size:16px;font-weight:700;color:var(--accent-hover)">${fmtAmt(detail.revenue)}</div></div>
+                ${displayHint.hideCosts?'':`<div style="padding:10px;background:var(--danger-bg);border-radius:6px"><div style="font-size:10px;color:var(--danger);font-weight:600;text-transform:uppercase">Fixed Costs</div><div style="font-size:16px;font-weight:700;color:var(--danger)">${fmtAmt(detail.costs)}</div></div>`}
+                ${displayHint.hideCosts?'':`<div style="padding:10px;background:var(--info-bg);border-radius:6px"><div style="font-size:10px;color:var(--info);font-weight:600;text-transform:uppercase">Cushion</div><div style="font-size:16px;font-weight:700;color:${detail.net>=0?'var(--accent-hover)':'var(--danger)'}">${fmtAmt(detail.net)}</div></div>`}
+            </div>
+            ${txTable(displayHint.revenueLabel||'Revenue', detail.revTxs, 'var(--accent-hover)', 'revenue')}
+            ${displayHint.hideCosts?'':txTable('Fixed Costs', detail.costTxs, 'var(--danger)', 'costs')}`;
+        el.style.display='block';
+        el.setAttribute('data-expanded',bucket);
+    }
+    window.toggleStratKpiDrill=toggleStratKpiDrill;
+
+    // ── Dashboard Load ──
+    // In-flight guard: concurrent loadDashboard() calls (sync-bar refresh,
+    // smartRefresh, other tabs' refreshFns firing together) share ONE run
+    // instead of doubling the 9-table Airtable request burst. The guard clears
+    // when a run settles, so the next call — or an explicit
+    // loadDashboard({ force: true }) after completion — starts a fresh fetch.
+    let _loadDashboardPromise = null;
+
+    // Sidebar badges, for BOTH render paths. This used to live only after the
+    // full 9-table Airtable refresh, so a cache render — which is the normal
+    // experience, and looks completely loaded — showed no CFV count and no
+    // sitemap count for the two minutes the refresh took (drift-079).
+    //
+    // The CFV rule itself is cfvIsVisible() in js/cfv.js. Do not re-derive it
+    // here: a second copy is exactly what let the sidebar hide a confirmed CFV
+    // the CFV page was still listing (drift-080).
+    function updateSidebarBadges() {
+        try {
+            if (typeof updateSitemapBadge === 'function') updateSitemapBadge();
+        } catch (e) { console.warn('[dashboard] sitemap badge update failed:', e); }
+        try {
+            if (typeof refreshCFVSidebarBadges === 'function') refreshCFVSidebarBadges();
+        } catch (e) { console.warn('[dashboard] CFV badge update failed:', e); }
+    }
+
+    function loadDashboard(opts) {
+        if (_loadDashboardPromise && !(opts && opts.force)) return _loadDashboardPromise;
+        const run = _runLoadDashboard().finally(() => {
+            if (_loadDashboardPromise === run) _loadDashboardPromise = null;
+        });
+        _loadDashboardPromise = run;
+        return run;
+    }
+
+    async function _runLoadDashboard() {
+        // Schedule the smart-refresh timer FIRST, before any rendering paths fire.
+        // Reason: renderDashboard (called from both the cache-hit and fresh-fetch
+        // paths) ends with markTabSynced('overview'), which auto-runs the health
+        // checks. One of those checks asserts refreshTimer is set. If we waited
+        // until after the fresh-fetch completed (as we used to), the cache-render
+        // path's health-check pass would always show this as a warning until the
+        // fresh fetch landed. Fixing it here means the wiring is in place from
+        // the moment loadDashboard is invoked.
+        if (refreshTimer) clearInterval(refreshTimer);
+        refreshTimer = setInterval(() => smartRefresh(), REFRESH_INTERVAL);
+
+        // Kick off Strategic KPIs loading IMMEDIATELY — parallel with everything
+        // below. It used to fire AFTER the main 9-table fetch landed (transactions
+        // alone is ~7k rows paginated) which pushed the KPIs section to ~60s on
+        // cold loads, AND it was also firing a second time after cache render,
+        // doubling the compute work. Now: one call, as early as possible, racing
+        // against the main fetch instead of queueing behind it.
+        loadStrategicKpis();
+
+        // Try instant render from cache first
+        const cached = await loadDashCache();
+        let renderedFromCache = false;
+        if (cached) {
+            try {
+                const d = cached.data;
+                allTransactions = d.transactions;
+                allTenancies   = d.tenancies;
+                allTenants     = d.tenants;
+                allCosts       = d.costs;
+                allCategories  = d.categories;
+                allSubCategories = d.subCategories;
+                allBusinesses  = d.businesses;
+                // Let runAutomatedKpis (fired via loadStrategicKpis at top) proceed.
+                markMainDataReady();
+                // Businesses are now populated — re-render the strategic KPI
+                // section in case its first paint raced ahead of them (filter
+                // chips showed only 'All' and rows said 'No business').
+                try { renderStrategicKpis(); } catch (e) { console.warn('[loadDashboard] strategic KPI re-render failed:', e); }
+                renderDashboard(d.accounts, d.costs, d.tenancies, d.transactions, d.rentalUnits, d.tenants);
+                document.getElementById('dashboard').style.display = 'block';
+                document.getElementById('loadingOverlay').style.display = 'none';
+                setRefreshingIndicator(true, cached.ageMs);
+                // Badges too. Measured on the deployed site 11 Aug 2026 across
+                // three loads: the page was interactive immediately but
+                // #cfvSidebarBadges stayed empty until the full Airtable refresh
+                // landed roughly two minutes later, because the badge update sat
+                // only on the fresh-fetch path below. detectCFVs() returned five
+                // entries the whole time — the data was there from the first
+                // paint. An empty badge is indistinguishable from "no overdue
+                // rent", on the one alarm Kevin scans first (drift-079).
+                updateSidebarBadges();
+                renderedFromCache = true;
+            } catch (e) {
+                console.warn('Cache render failed, falling back to full load:', e);
+                clearDashCache();
+                renderedFromCache = false;
+            }
+        }
+
+        if (!renderedFromCache) {
+            document.getElementById('loadingOverlay').style.display = 'flex';
+            document.getElementById('loadingSpinner').style.display = '';
+            document.getElementById('loadingText').textContent = 'Loading your dashboard...';
+            document.getElementById('loadingActions').style.display = 'none';
+        }
+
+        try {
+            // Fetch Airtable data and Gmail invoices in parallel
+            const [accounts, costs, tenancies, transactions, rentalUnits, tenants, categories, subCategories, businesses] = await Promise.all([
+                airtableFetch(TABLES.accounts),
+                airtableFetch(TABLES.costs),
+                airtableFetch(TABLES.tenancies),
+                airtableFetch(TABLES.transactions),
+                airtableFetch(TABLES.rentalUnits),
+                airtableFetch(TABLES.tenants),
+                airtableFetch(TABLES.categories),
+                airtableFetch(TABLES.subCategories),
+                airtableFetch(TABLES.businesses),
+            ]);
+
+            // Fire invoice fetch from Airtable + Gmail sync + Fintable sync check in parallel (non-blocking)
+            fetchInvoicesFromAirtable();
+            triggerGmailInvoiceSync();
+            checkFintableSyncStatus();
+
+            allTransactions = transactions;
+            allTenancies = tenancies;
+            allTenants = tenants;
+            allCosts = costs;
+            allCategories = categories;
+            allSubCategories = subCategories;
+            allBusinesses = businesses;
+            // Signal to runAutomatedKpis that the globals it depends on are now
+            // populated. (No-op if cache-hit already resolved it.)
+            markMainDataReady();
+            // Businesses are now populated — re-render the strategic KPI section
+            // in case its first paint raced ahead of them (filter chips showed
+            // only 'All' and rows said 'No business').
+            try { renderStrategicKpis(); } catch (e) { console.warn('[loadDashboard] strategic KPI re-render failed:', e); }
+
+            // Clear stale "returned" flags — if Airtable now shows In Payment, the flag is no longer needed
+            tenancies.forEach(t => {
+                const status = getPaymentStatusName(getField(t, F.tenPayStatus)).toLowerCase().trim();
+                if (status === 'in payment') {
+                    localStorage.removeItem('cfv_' + t.id + '_returned');
+                }
+            });
+            renderDashboard(accounts, costs, tenancies, transactions, rentalUnits, tenants);
+
+            // Save fresh data to cache for next instant reload
+            saveDashCache({ accounts, costs, tenancies, transactions, rentalUnits, tenants, categories, subCategories, businesses });
+
+            document.getElementById('dashboard').style.display = 'block';
+            document.getElementById('loadingOverlay').style.display = 'none';
+            setRefreshingIndicator(false);
+
+            // Update sidebar badges on load
+            updateSidebarBadges();
+
+            // Arrears engine: once-per-load sweep that opens / progresses /
+            // pauses Arrears Records based on tenant type and days from due.
+            // Re-enabled with cache load fix (treat airtableFetch return as array)
+            // plus triple-guarded create (cache check + in-flight Set).
+            try {
+                if (typeof runArrearsEngine === 'function') {
+                    const tenantLookup = {};
+                    allTenants.forEach(t => { tenantLookup[t.id] = t; });
+                    runArrearsEngine(new Date(), tenantLookup).catch(err => {
+                        console.warn('arrears: engine sweep failed', err);
+                    });
+                }
+            } catch(e) { console.warn('arrears: engine wiring failed', e); }
+
+            // (Smart-refresh timer already scheduled at the top of loadDashboard
+            // so the health check sees it as wired regardless of which render
+            // path fires first. Strategic KPIs likewise.)
+        } catch (e) {
+            if (e.message === 'Auth failed') { clearDashCache(); return; }
+            console.error(e);
+            // If we're already showing cached data, keep it visible and just flag the refresh failure
+            if (renderedFromCache) {
+                const el = document.getElementById('refreshingBadge');
+                if (el) {
+                    el.innerHTML = '<span class="refresh-dot" style="background:var(--danger)"></span>' +
+                        'Couldn\u2019t refresh \u2014 showing saved data';
+                    el.style.display = 'inline-flex';
+                }
+                return;
+            }
+            document.getElementById('loadingSpinner').style.display = 'none';
+            document.getElementById('loadingText').innerHTML =
+                '<div style="font-size:20px;color:var(--danger);margin-bottom:8px">Couldn\u2019t load your dashboard</div>' +
+                '<div style="font-size:14px;color:var(--text-secondary);max-width:480px;text-align:center">' +
+                (e.message || 'Unknown error') + '</div>';
+            document.getElementById('loadingActions').style.display = 'block';
+        }
+    }
+
+    // Single shared predicate for "is this rental unit void". Accepts select
+    // objects and plain strings, case-insensitive, matches 'Void', 'void',
+    // 'Void – refurb' etc. Used by BOTH the Void Units count and the
+    // per-property breakdown so the two figures can never disagree.
+    function isUnitVoid(unitRec) {
+        const status = getField(unitRec, F.unitStatus);
+        if (!status) return false;
+        const name = typeof status === 'string' ? status : (status.name || '');
+        return name.trim().toLowerCase().startsWith('void');
+    }
+
+    // ── AI Agents KPI — the headline Systemisation metric on the front page ──
+    // Agent state lives in the workflows table's SOP JSON (sop.agent.state);
+    // pending approvals live in the Agent Activity table. Loaded async so the
+    // dashboard render never waits on it; the slot stays empty on failure.
+    const AGENTS_WF_TBL = 'tblLPoRHFBl0vqR24';
+    const AGENTS_WF_SOP = 'fldW4qoDv2mrTNvu7';
+    const AGENTS_ACTIVITY_TBL = 'tblJ3GFnAAoXf99e9';
+
+    async function loadAgentKpi() {
+        const slot = document.getElementById('agentKpiCard');
+        if (!slot || !PAT) return;
+        try {
+            const [wfRes, actRes] = await Promise.all([
+                fetch(`https://api.airtable.com/v0/${BASE_ID}/${AGENTS_WF_TBL}?returnFieldsByFieldId=true&pageSize=100&fields%5B%5D=${AGENTS_WF_SOP}`, { headers: { Authorization: `Bearer ${PAT}` } }),
+                fetch(`https://api.airtable.com/v0/${BASE_ID}/${AGENTS_ACTIVITY_TBL}?pageSize=100`, { headers: { Authorization: `Bearer ${PAT}` } }),
+            ]);
+            if (!wfRes.ok) return;
+            const wfs = (await wfRes.json()).records || [];
+            const agents = [];
+            wfs.forEach(w => {
+                try {
+                    const sop = JSON.parse(w.fields[AGENTS_WF_SOP] || 'null');
+                    if (sop && sop.disposition && sop.disposition.type === 'agent' && sop.agent && sop.agent.state) {
+                        agents.push({ id: w.id, state: sop.agent.state, title: sop.sopTitle || 'Agent' });
+                    }
+                } catch (e) { /* not JSON — not an agent workflow */ }
+            });
+            const pendingByAgent = {};
+            if (actRes.ok) {
+                ((await actRes.json()).records || []).forEach(r => {
+                    if ((r.fields['State'] || '') !== 'Proposed') return;
+                    (r.fields['Agent'] || []).forEach(id => { pendingByAgent[id] = (pendingByAgent[id] || 0) + 1; });
+                });
+            }
+            const live = agents.filter(a => a.state === 'live').length;
+            const testing = agents.filter(a => a.state === 'testing').length;
+            const pending = agents.reduce((s, a) => s + (pendingByAgent[a.id] || 0), 0);
+            const detail = agents.length
+                ? agents.map(a => `<div class="od-breakdown-row"><span>${escHtml(a.title)}</span><span>${escHtml(a.state.toUpperCase())}${pendingByAgent[a.id] ? ` · ${pendingByAgent[a.id]} awaiting OK` : ''}</span></div>`).join('')
+                    + `<div style="margin-top:8px"><button class="od-btn-secondary od-btn-sm" onclick="event.stopPropagation();switchTab('systemisation')">Open Systemisation</button></div>`
+                : '<div class="od-breakdown-row"><span>No agents yet — build one from a workflow SOP in Systemisation.</span></div>';
+            const card = document.getElementById('agentKpiCard');
+            if (!card) return;
+            card.outerHTML = expandableCard('AI Agents', `${live} live`,
+                `${testing} testing${pending ? ` | <span class="text-amber">${pending} awaiting your OK</span>` : ''}`,
+                detail, live > 0 ? 'text-green' : '');
+        } catch (e) { console.warn('Agent KPI load failed:', e); }
+    }
+
+    // ── AI workforce approvals ──────────────────────────────────────────
+    // Separate from loadAgentKpi above, which reports the Systemisation
+    // agent runtime. This card is the AI WORKFORCE: how much agent work is
+    // sitting waiting for Kevin, and how accurate each agent has been at
+    // each kind of work. Crossing the bar produces a recommendation only —
+    // the owner moves the gears, accuracy only advises.
+    // The scoring maths and the threshold come from js/agent-accuracy.js — the
+    // same module the Task OS uses, so the card and the AI Agents tab can never
+    // disagree about whether an agent has cleared the bar.
+    async function loadAgentApprovalKpi() {
+        const slot = document.getElementById('agentApprovalCard');
+        if (!slot || !PAT) return;
+        const url = (params) => `https://api.airtable.com/v0/${BASE_ID}/${TABLES.tasks}?returnFieldsByFieldId=true&pageSize=100&${params}`;
+        const flds = [TASK_FIELDS.name, TASK_FIELDS.approvalOutcome, TASK_FIELDS.approvedAt,
+                      TASK_FIELDS.taskType, TASK_FIELDS.sentForApprovalBy, TASK_FIELDS.teamMember]
+            .map(f => `fields%5B%5D=${f}`).join('&');
+        try {
+            const [waitRes, histRes, teamRes] = await Promise.all([
+                fetch(url(`${flds}&filterByFormula=${encodeURIComponent(`{Status}='Approval'`)}`), { headers: { Authorization: `Bearer ${PAT}` } }),
+                // LEN(field&'') rather than != '' — a blank Airtable field is not
+                // reliably unequal to an empty string, and that trap has emptied
+                // a whole query in this base before.
+                fetch(url(`${flds}&filterByFormula=${encodeURIComponent(`LEN({Approval Outcome}&'')>0`)}`), { headers: { Authorization: `Bearer ${PAT}` } }),
+                fetch(`https://api.airtable.com/v0/${BASE_ID}/${TABLES.teamMembers}?returnFieldsByFieldId=true&pageSize=100&fields%5B%5D=${TEAM_MEMBER_FIELDS.name}&filterByFormula=${encodeURIComponent(`{Active}=TRUE()`)}`, { headers: { Authorization: `Bearer ${PAT}` } }),
+            ]);
+            if (!waitRes.ok || !histRes.ok) return;
+            const waiting = (await waitRes.json()).records || [];
+            const history = (await histRes.json()).records || [];
+            const names = {};
+            if (teamRes.ok) ((await teamRes.json()).records || []).forEach(r => { names[r.id] = (r.fields || {})[TEAM_MEMBER_FIELDS.name] || r.id; });
+
+            const linkId = (v) => Array.isArray(v) && v.length ? (typeof v[0] === 'object' ? (v[0].id || '') : String(v[0])) : '';
+            const selName = (v) => !v ? '' : (typeof v === 'string' ? v : (v.name || ''));
+            const decisions = history.map(r => {
+                const f = r.fields || {};
+                return {
+                    agentId: linkId(f[TASK_FIELDS.sentForApprovalBy]) || linkId(f[TASK_FIELDS.teamMember]),
+                    outcome: selName(f[TASK_FIELDS.approvalOutcome]),
+                    taskType: selName(f[TASK_FIELDS.taskType]) || 'Unclassified',
+                    at: f[TASK_FIELDS.approvedAt] || '',
+                };
+            });
+            const rows = AgentAccuracy.computeAgentAccuracy(decisions, names)
+                .map(r => ({ agent: r.agentName, type: r.taskType, total: r.total, accurate: r.accurate, rate: r.rate, ready: r.ready }))
+                .sort((a, c) => c.total - a.total);
+            const recs = rows.filter(r => r.ready);
+
+            const detail = `
+                <div class="od-breakdown-row"><span>Waiting on you now</span><span>${waiting.length}</span></div>
+                <div class="od-breakdown-row"><span>Decisions recorded</span><span>${history.length}</span></div>
+                ${rows.length ? rows.slice(0, 8).map(r => `<div class="od-breakdown-row"><span>${escHtml(r.agent)} · ${escHtml(r.type)}</span><span>${Math.round(r.rate * 100)}% of ${r.total}${r.ready ? ' · <span class="text-green">ready</span>' : ''}</span></div>`).join('')
+                    : '<div class="od-breakdown-row"><span>No decisions recorded yet — scores appear after your first approval.</span></div>'}
+                ${recs.length ? `<div class="od-breakdown-row" style="border-top:1px solid var(--border-default);margin-top:4px;padding-top:4px"><span>${escHtml(recs.map(r => r.agent + ' on ' + r.type).join('; '))} cleared the bar. Your call — nothing has changed.</span></div>` : ''}
+                <div style="margin-top:8px"><button class="od-btn-secondary od-btn-sm" onclick="event.stopPropagation();switchTab('tasks')">Open Tasks &rarr; AI Agents</button></div>`;
+
+            const card = document.getElementById('agentApprovalCard');
+            if (!card) return;
+            card.outerHTML = expandableCard('Agent Approvals', `${waiting.length} waiting`,
+                `${history.length} decided${recs.length ? ` | <span class="text-green">${recs.length} ready for your call</span>` : ''}`,
+                detail, waiting.length > 0 ? 'text-amber' : 'text-green');
+        } catch (e) { console.warn('Agent approval KPI load failed:', e); }
+    }
+
+    // ── AI share of work ────────────────────────────────────────────────
+    // The north star is AI doing up to 90% of repeatable operational work.
+    // This is the number that says how far along that is, and it is measured
+    // in TIME, not task count: fifty 15-minute email triages is not the same
+    // contribution as one 8-hour build.
+    //
+    // Numerator   estimated minutes on tasks COMPLETED in the window whose
+    //             Team Member link holds an AI agent (Is AI Agent ticked).
+    // Denominator estimated minutes on every task completed in the window.
+    //
+    // Ownership is read from Team Member, NEVER from Assignee. Assignee is a
+    // human collaborator field and agents cannot hold one — approvals.js
+    // actively clears it when an agent takes a task. Reading Assignee here
+    // would score every agent task as unowned.
+    //
+    // Coverage is published alongside the headline because a task with no
+    // Time Estimate contributes nothing to either side. At 91% coverage the
+    // number is sound; if that falls, the caveat appears on the card rather
+    // than the number quietly drifting.
+    // Renders into the slot AND keeps the id on the rendered card, so a refresh
+    // re-renders instead of silently doing nothing. The older agent cards replace
+    // their slot with an id-less card and can only ever render once.
+    function renderAiShareCard(value, sub, detail, valueClass = '') {
+        const host = document.getElementById('aiShareCard');
+        if (!host) return;
+        const tmp = document.createElement('div');
+        tmp.innerHTML = expandableCard('Work Done by AI', value, sub, detail, valueClass);
+        const card = tmp.firstElementChild;
+        if (!card) return;
+        card.id = 'aiShareCard';
+        host.replaceWith(card);
+    }
+
+    async function loadAiShareKpi() {
+        if (!document.getElementById('aiShareCard') || !PAT) return;
+        try {
+            const [tasks, team] = await Promise.all([
+                airtableFetch(TABLES.tasks, {
+                    pageSize: 100,
+                    'fields[]': [TASK_FIELDS.name, TASK_FIELDS.completionDate,
+                                 TASK_FIELDS.estimatedMinutes, TASK_FIELDS.teamMember,
+                                 TASK_FIELDS.approvalOutcome, TASK_FIELDS.sentForApprovalBy],
+                    filterByFormula: `AND({Status}='Completed', IS_AFTER({Completion Date}, DATEADD(TODAY(),-90,'days')))`,
+                }),
+                airtableFetch(TABLES.teamMembers, {
+                    pageSize: 100,
+                    'fields[]': [TEAM_MEMBER_FIELDS.name, TEAM_MEMBER_FIELDS.isAgent],
+                }),
+            ]);
+
+            // Control check. An empty result here is indistinguishable from a
+            // broken filter (a renamed field returns 200 OK with no records),
+            // and "0% of nothing" would read as a real score of zero.
+            if (!tasks.length || !team.length) {
+                renderAiShareCard('no data',
+                    'nothing completed in the last 90 days, or the query is broken',
+                    '<div class="od-breakdown-row"><span>No completed tasks came back. This card shows a number only when there is work to measure.</span></div>');
+                return;
+            }
+
+            const agentIds = new Set(team.filter(r => (r.fields || {})[TEAM_MEMBER_FIELDS.isAgent]).map(r => r.id));
+            const linkIds = (v) => Array.isArray(v) ? v.map(x => (x && typeof x === 'object') ? x.id : x) : [];
+            const cutoff = (days) => {
+                const d = new Date(); d.setDate(d.getDate() - days);
+                return d.toISOString().slice(0, 10);
+            };
+
+            // Kevin's ruling, 9 Aug 2026: work an agent prepared and he approved
+            // FIRST TIME is AI work — he only spent an approval on it. The rule cuts
+            // both ways, and the second half is the one that keeps the number honest:
+            // work he sent back is NOT AI work, because he had to redo it. Without
+            // that, a task the agent got wrong still scores as AI purely because the
+            // agent's name is on Team Member. Three tasks were doing exactly that.
+            const selName = (v) => !v ? '' : (typeof v === 'string' ? v : (v.name || ''));
+            const REDONE_BY_KEVIN = ['Changes requested', 'Rejected'];
+
+            const isAiWork = (f) => {
+                const outcome = selName(f[TASK_FIELDS.approvalOutcome]);
+                if (REDONE_BY_KEVIN.includes(outcome)) return false;
+                if (outcome === 'Approved as-is'
+                    && linkIds(f[TASK_FIELDS.sentForApprovalBy]).some(id => agentIds.has(id))) return true;
+                return linkIds(f[TASK_FIELDS.teamMember]).some(id => agentIds.has(id));
+            };
+
+            const window_ = (days) => {
+                const from = cutoff(days);
+                let aiMin = 0, humanMin = 0, aiCount = 0, total = 0, withEstimate = 0;
+                let approvedFirstTime = 0, sentBack = 0, minorEdits = 0;
+                tasks.forEach(r => {
+                    const f = r.fields || {};
+                    const done = String(f[TASK_FIELDS.completionDate] || '').slice(0, 10);
+                    if (!done || done < from) return;
+                    total++;
+                    const outcome = selName(f[TASK_FIELDS.approvalOutcome]);
+                    if (outcome === 'Approved as-is') approvedFirstTime++;
+                    else if (outcome === 'Approved with minor edits') minorEdits++;
+                    else if (REDONE_BY_KEVIN.includes(outcome)) sentBack++;
+                    const isAi = isAiWork(f);
+                    if (isAi) aiCount++;
+                    const mins = Number(f[TASK_FIELDS.estimatedMinutes]) || 0;
+                    if (!mins) return;
+                    withEstimate++;
+                    if (isAi) aiMin += mins; else humanMin += mins;
+                });
+                const measured = aiMin + humanMin;
+                return {
+                    total, withEstimate, aiCount, aiMin, humanMin, measured,
+                    approvedFirstTime, minorEdits, sentBack,
+                    share: measured ? (aiMin / measured) * 100 : 0,
+                    coverage: total ? (withEstimate / total) * 100 : 0,
+                };
+            };
+
+            const m30 = window_(30), m90 = window_(90);
+            const hrs = (m) => (m / 60).toFixed(1);
+            const trend = m90.measured
+                ? (m30.share >= m90.share ? 'text-green' : 'text-amber')
+                : '';
+            const lowCoverage = m30.coverage < 80;
+
+            const detail = `
+                <div class="od-breakdown-row"><span>AI hours (30 days)</span><span>${hrs(m30.aiMin)}</span></div>
+                <div class="od-breakdown-row"><span>Human hours (30 days)</span><span>${hrs(m30.humanMin)}</span></div>
+                <div class="od-breakdown-row" style="border-top:1px solid var(--border-default);margin-top:4px;padding-top:4px"><span>Tasks completed by AI</span><span>${m30.aiCount} of ${m30.total}</span></div>
+                <div class="od-breakdown-row"><span>Approved first time (counts as AI)</span><span>${m30.approvedFirstTime}</span></div>
+                ${m30.minorEdits ? `<div class="od-breakdown-row"><span>Approved with minor edits (not counted — say if you want these in)</span><span>${m30.minorEdits}</span></div>` : ''}
+                ${m30.sentBack ? `<div class="od-breakdown-row"><span class="text-amber">Sent back to the agent (counted as your work, not AI's)</span><span>${m30.sentBack}</span></div>` : ''}
+                <div class="od-breakdown-row"><span>Last 90 days</span><span>${m90.share.toFixed(1)}% of ${hrs(m90.measured)} hrs</span></div>
+                <div class="od-breakdown-row"><span>Tasks carrying a time estimate</span><span>${Math.round(m30.coverage)}%</span></div>
+                ${lowCoverage ? `<div class="od-breakdown-row"><span class="text-amber">Under 80% of completed tasks have a time estimate, so this number is shakier than usual. The nightly task sweep fills estimates in.</span></div>` : ''}
+                <div class="od-breakdown-row"><span>Target</span><span>90% of repeatable operational work</span></div>
+                <div style="margin-top:8px"><button class="od-btn-secondary od-btn-sm" onclick="event.stopPropagation();switchTab('tasks')">Open Tasks &rarr; AI Agents</button></div>`;
+
+            renderAiShareCard(`${m30.share.toFixed(1)}%`,
+                `last 30 days, by time | ${hrs(m30.aiMin)} of ${hrs(m30.measured)} hrs`,
+                detail, trend);
+        } catch (e) { console.warn('AI share KPI load failed:', e); }
+    }
+
+    function renderDashboard(accounts, costs, tenancies, transactions, rentalUnits, tenants) {
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+        // Expose accounts + rentalUnits as globals so the sync-bar's health checks
+        // (which run lazily on user click) can read live values rather than capturing
+        // stale closures from this single render.
+        allAccounts = accounts;
+        allRentalUnits = rentalUnits;
+
+        // Header
+        document.getElementById('headerDate').textContent =
+            now.toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }) +
+            ' | Combined Accounts: Santander + TNT Mgt Zempler';
+        document.getElementById('lastUpdated').textContent =
+            now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
+
+        // ── SECTION 1: Financial Overview ──
+        const santanderRec = accounts.find(r => r.id === REC.santander);
+        const zemplerRec = accounts.find(r => r.id === REC.tntZempler);
+        const santBal = Number(getField(santanderRec, F.accGBP)) || 0;
+        const zempBal = Number(getField(zemplerRec, F.accGBP)) || 0;
+        const openingBalance = santBal + zempBal;
+
+        // Unreconciled transactions
+        const unreconciledTx = transactions.filter(r => {
+            const reconciled = getField(r, F.txReconciled);
+            const alias = getField(r, F.txAccountAlias);
+            return !reconciled && isOurAccount(alias);
+        });
+
+        // Monthly Income — split into In Payment only (low) and In Payment + CFV Actioned (high)
+        const inPaymentTenanciesS1 = tenancies.filter(r => getPaymentStatusName(getField(r, F.tenPayStatus)).trim().toLowerCase() === 'in payment' && isTenantStatusActive(r));
+        const cfvActionedTenanciesS1 = tenancies.filter(r => getPaymentStatusName(getField(r, F.tenPayStatus)).trim().toLowerCase() === 'cfv actioned' && isTenantStatusActive(r));
+        const incTenancies = [...inPaymentTenanciesS1, ...cfvActionedTenanciesS1];
+        const inPaymentIncome = inPaymentTenanciesS1.reduce((s, r) => s + (Number(getField(r, F.tenRent)) || 0), 0);
+        const cfvActionedIncome = cfvActionedTenanciesS1.reduce((s, r) => s + (Number(getField(r, F.tenRent)) || 0), 0);
+        const monthlyIncome = inPaymentIncome + cfvActionedIncome; // full = In Payment + CFV Actioned
+        const inPaymentCount = inPaymentTenanciesS1.length;
+        const cfvActionedCount = cfvActionedTenanciesS1.length;
+
+        // Monthly Costs — include ALL active/in-payment costs regardless of which account they're paid from
+        const activeCosts = costs.filter(r => isCostActive(r));
+        const monthlyCosts = activeCosts.reduce((s, r) => s + (Number(getField(r, F.costExpected)) || 0), 0);
+
+        // Operating cushion = revenue − fixed costs. (Distinct from gross profit = revenue − COGS,
+        // and from operating profit = revenue − fixed − variable costs, which we'll compute elsewhere.)
+        // Low = In Payment only minus costs; High = (In Payment + CFV Actioned) income minus costs.
+        const operatingCushionLow = inPaymentIncome - monthlyCosts;
+        const operatingCushionHigh = monthlyIncome - monthlyCosts;
+        const operatingCushionMarginLow = inPaymentIncome > 0 ? (operatingCushionLow / inPaymentIncome * 100).toFixed(2) : '0.00';
+        const operatingCushionMarginHigh = monthlyIncome > 0 ? (operatingCushionHigh / monthlyIncome * 100).toFixed(2) : '0.00';
+
+        // Sort income tenancies by due day asc, costs by due day asc
+        const incSorted = [...incTenancies].sort((a, b) => (getNumVal(a, F.tenDueDay, 99)) - (getNumVal(b, F.tenDueDay, 99)));
+        const costSorted = [...activeCosts].sort((a, b) => (getNumVal(a, F.costDueDay, 99)) - (getNumVal(b, F.costDueDay, 99)));
+
+        // Unreconciled transactions bar (above Financial Overview, alongside Balance Calculator)
+        // Accuracy stats now live in Airtable (TABLES.reconAudit). getReconAccuracyStats() returns
+        // cached values for an instant paint; the async refresh below rehydrates from Airtable and
+        // swaps in fresh HTML without disturbing the Unreconciled card next to it.
+        const accCard = buildAccuracyKPIHtml(getReconAccuracyStats());
+        // Auto-reconcile agent — the visible log of what AI auto-approved today, each with one-click undo
+        const _autoLog = (typeof getAutoLog === 'function' ? getAutoLog() : []);
+        const _todayStart = new Date(); _todayStart.setHours(0, 0, 0, 0);
+        const _autoToday = _autoLog.filter(e => (e.at || 0) >= _todayStart.getTime());
+        const autoPanelHtml = _autoToday.length === 0 ? '' : `
+            <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-default)">
+                <div style="font-size:12px;font-weight:600;color:var(--text-secondary);margin-bottom:2px">Auto-reconciled today (${_autoToday.length}) — AI did these, review and undo any</div>
+                <div style="font-size:10px;color:var(--text-muted);margin-bottom:6px">Undo also stops the AI auto-doing that one again.</div>
+                ${_autoToday.map(e => `<div class="detail-item" style="align-items:center">
+                    <span class="detail-item-name">${escHtml(e.date || '')} — ${escHtml(e.vendor || '')} <span style="color:var(--text-muted)">&rarr; ${escHtml(e.subCatName || e.categoryName || '')}</span></span>
+                    <span style="display:flex;align-items:center;gap:8px">
+                        <span class="detail-item-value">${fmt(Number(e.amount) || 0)}</span>
+                        <button onclick="event.stopPropagation(); undoAutoReconcile('${escHtml(e.txId)}')" class="od-btn" style="padding:2px 8px;font-size:11px">Undo</button>
+                    </span>
+                </div>`).join('')}
+            </div>`;
+        document.getElementById('reconBar').innerHTML = `
+            ${expandableCard('Unreconciled Transactions', unreconciledTx.length, `Santander + TNT Mgt Zempler`,
+                (unreconciledTx.length === 0
+                    ? '<div class="detail-item"><span><em>No unreconciled transactions</em></span></div>'
+                    : unreconciledTx.map(r => `<div class="detail-item"><span class="detail-item-name">${escHtml(getField(r, F.txDate) || '')} — ${escHtml(txLabel(r))}</span><span class="detail-item-value">${fmt(Number(getField(r, F.txReportAmount)) || 0)}</span></div>`).join(''))
+                + `<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-default);display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <button onclick="event.stopPropagation(); triggerReconciliation(this)" class="od-btn od-btn-primary" style="background:var(--info)">Run Reconciliation</button>
+                    <button onclick="event.stopPropagation(); runAutoReconcile()" class="od-btn od-btn-primary" title="Auto-approve only the near-certain recurring outgoing matches — never rent">Auto-reconcile safe matches</button>
+                    <label style="display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text-secondary);cursor:pointer" title="When on, the safe matches are auto-approved each time the dashboard loads. Review them in the panel below and undo any." onclick="event.stopPropagation()">
+                        <input type="checkbox" ${(typeof isAutoOnLoadEnabled === 'function' && isAutoOnLoadEnabled()) ? 'checked' : ''} onclick="setAutoOnLoad(this.checked)"> Auto-reconcile on load
+                    </label>
+                    <span style="font-size:11px;color:var(--text-muted)" id="reconStatus"></span>
+                </div>`
+                + autoPanelHtml
+            )}
+            <div id="accuracyKpiCard">${accCard}</div>
+        `;
+        // Auto-reconcile agent: optional auto-run on load (opt-in, once per load, safe tier only)
+        if (typeof maybeAutoReconcileOnLoad === 'function') maybeAutoReconcileOnLoad();
+        // Background: migrate legacy localStorage log → Airtable (one-shot, no-op after first run),
+        // then refresh from Airtable and swap in the up-to-date card.
+        (async () => {
+            try { await migrateLocalReconLog(); } catch (e) { console.warn('[renderDashboard] recon log migration failed:', e); }
+            // Same one-shot treatment for the knowledge base: lift the localStorage rules into
+            // Airtable, then load the authoritative set so this device matches every other one.
+            try {
+                await migrateReconRulesToAirtable();
+                await loadReconRules();
+            } catch (e) { console.warn('[renderDashboard] recon rules load failed:', e); }
+            try {
+                const fresh = await refreshReconAccuracyStats();
+                const host = document.getElementById('accuracyKpiCard');
+                if (host) host.innerHTML = buildAccuracyKPIHtml(fresh);
+            } catch (e) { console.warn('[renderDashboard] accuracy stats refresh failed:', e); }
+        })();
+
+        document.getElementById('financialCards').innerHTML = `
+            <div class="kpi-card">
+                <div class="kpi-card-label">Opening Balance</div>
+                <div class="kpi-card-value">${fmt(openingBalance)}</div>
+                <div class="kpi-card-sub">Santander ${fmt(santBal)} | TNT Zempler ${fmt(zempBal)}</div>
+            </div>
+            ${expandableCard('Monthly Income', `<span style="color:var(--warning)">£${Math.floor(inPaymentIncome).toLocaleString('en-GB')}</span> <span style="color:var(--text-muted);font-size:20px;margin:0 4px">–</span> <span style="color:var(--success)">£${Math.floor(monthlyIncome).toLocaleString('en-GB')}</span>`,
+                `${inPaymentCount} In Payment (confirmed) + ${cfvActionedCount} CFV Actioned (expected)`,
+                `<div style="margin-bottom:8px;font-weight:600;color:var(--text-primary)">In Payment (${inPaymentCount})</div>` +
+                [...inPaymentTenanciesS1].sort((a,b) => (Number(getField(a, F.tenDueDay))||99) - (Number(getField(b, F.tenDueDay))||99)).map(r => {
+                    const dueDay = getNumVal(r, F.tenDueDay, null);
+                    const dueDayStr = dueDay ? `Day ${dueDay}` : '—';
+                    return `<div class="detail-item"><span class="detail-item-name"><span style="color:var(--text-secondary);min-width:52px;display:inline-block">${escHtml(dueDayStr)}</span>${escHtml(String(getField(r, F.tenSurname) || ''))} – ${escHtml(String(getField(r, F.tenRef) || ''))}</span><span class="detail-item-value">${fmt(Number(getField(r, F.tenRent)) || 0)}</span></div>`;
+                }).join('') +
+                `<div class="detail-total"><span>In Payment Subtotal</span><span>${fmt(inPaymentIncome)}</span></div>` +
+                (cfvActionedCount > 0 ? `<div style="margin:12px 0 8px;font-weight:600;color:var(--warning)">CFV Actioned (${cfvActionedCount})</div>` +
+                [...cfvActionedTenanciesS1].sort((a,b) => (Number(getField(a, F.tenDueDay))||99) - (Number(getField(b, F.tenDueDay))||99)).map(r => {
+                    const dueDay = getNumVal(r, F.tenDueDay, null);
+                    const dueDayStr = dueDay ? `Day ${dueDay}` : '—';
+                    return `<div class="detail-item"><span class="detail-item-name"><span style="color:var(--text-secondary);min-width:52px;display:inline-block">${escHtml(dueDayStr)}</span>${escHtml(String(getField(r, F.tenSurname) || ''))} – ${escHtml(String(getField(r, F.tenRef) || ''))}</span><span class="detail-item-value">${fmt(Number(getField(r, F.tenRent)) || 0)}</span></div>`;
+                }).join('') +
+                `<div class="detail-total"><span>Full Total (incl. CFV Actioned)</span><span>${fmt(monthlyIncome)}</span></div>` : ''),
+                ''
+            )}
+            ${expandableCard('Monthly Costs', fmt(monthlyCosts), `${activeCosts.length} active costs`,
+                costSorted.map(r => {
+                    const dueDay = getNumVal(r, F.costDueDay, null);
+                    const dueDayStr = dueDay ? `Day ${dueDay}` : '—';
+                    return `<div class="detail-item"><span class="detail-item-name"><span style="color:var(--text-secondary);min-width:52px;display:inline-block">${escHtml(dueDayStr)}</span>${escHtml(String(getField(r, F.costName) || ''))}</span><span class="detail-item-value">${fmt(Number(getField(r, F.costExpected)) || 0)}</span></div>`;
+                }).join('') +
+                `<div class="detail-total"><span>Total</span><span>${fmt(monthlyCosts)}</span></div>`,
+                'text-red'
+            )}
+            <div class="kpi-card">
+                <div class="kpi-card-label">Monthly Operating Cushion (plan)</div>
+                <div class="kpi-card-value"><span style="color:var(--warning)">£${Math.floor(operatingCushionLow).toLocaleString('en-GB')}</span><span style="color:var(--text-muted);font-size:20px;margin:0 4px">–</span><span style="color:var(--success)">£${Math.floor(operatingCushionHigh).toLocaleString('en-GB')}</span></div>
+                <div class="kpi-card-sub">Contracted rent minus expected fixed costs — In Payment only → incl. CFV Actioned. This is the PLAN figure; the cash figure is the project KPI "Monthly operating cushion (cash)" and runs about £3,400 lower.</div>
+            </div>
+            <div class="kpi-card">
+                <div class="kpi-card-label">Operating Cushion Margin</div>
+                <div class="kpi-card-value"><span style="color:var(--warning)">${operatingCushionMarginLow}%</span><span style="color:var(--text-muted);font-size:20px;margin:0 4px">–</span><span style="color:var(--success)">${operatingCushionMarginHigh}%</span></div>
+                <div class="kpi-card-sub">Operating Cushion ÷ Monthly Income — In Payment only → incl. CFV Actioned</div>
+            </div>
+        `;
+
+        // ── SECTION 2: Portfolio Overview ──
+        const totalUnits = rentalUnits.length;
+        const voidUnits = rentalUnits.filter(isUnitVoid);
+        const occupiedCount = totalUnits - voidUnits.length;
+        const occupancyRate = totalUnits > 0 ? (occupiedCount / totalUnits * 100).toFixed(2) : '0.00';
+
+        // Group by property
+        const unitsByProperty = {};
+        rentalUnits.forEach(r => {
+            const propVals = lookupValues(getField(r, F.unitPropName));
+            const propName = propVals.length > 0 ? propVals.join(', ') : 'Unknown';
+            if (!unitsByProperty[propName]) unitsByProperty[propName] = { total: 0, occupied: 0, voids: [] };
+            unitsByProperty[propName].total++;
+            if (isUnitVoid(r)) {
+                unitsByProperty[propName].voids.push(r);
+            } else {
+                unitsByProperty[propName].occupied++;
+            }
+        });
+
+        document.getElementById('portfolioCards').innerHTML = `
+            ${expandableCard('Total Rental Units', totalUnits, '',
+                Object.entries(unitsByProperty).sort((a,b) => b[1].total - a[1].total)
+                    .map(([p, d]) => `<div class="detail-item"><span class="detail-item-name">${escHtml(p)}</span><span class="detail-item-value">${d.total} units</span></div>`).join('')
+            )}
+            ${expandableCard('Occupied Units', occupiedCount, '',
+                Object.entries(unitsByProperty).filter(([,d]) => d.occupied > 0).sort((a,b) => b[1].occupied - a[1].occupied)
+                    .map(([p, d]) => `<div class="detail-item"><span class="detail-item-name">${escHtml(p)}</span><span class="detail-item-value">${d.occupied} units</span></div>`).join(''),
+                'text-green'
+            )}
+            ${expandableCard('Void Units', voidUnits.length, '',
+                voidUnits.map(r => {
+                    // Primary field (formula) = display name e.g. "Unit 3 – 42 Elmdon Place"
+                    let unitDisplay = getField(r, F.unitName);
+                    if (Array.isArray(unitDisplay)) unitDisplay = unitDisplay.join(', ');
+                    // Unit Number field
+                    const unitNum = getField(r, F.unitNumber);
+                    // Property Name (Short) — multipleLookupValues
+                    const propVals = lookupValues(getField(r, F.unitPropName));
+                    const propStr = propVals.join(', ');
+                    // Build label: prefer primary field, fallback to "Unit X — Property"
+                    let label;
+                    if (unitDisplay && String(unitDisplay).trim()) {
+                        label = String(unitDisplay).trim();
+                    } else if (unitNum && propStr) {
+                        label = `Unit ${unitNum} — ${propStr}`;
+                    } else if (propStr) {
+                        label = propStr;
+                    } else if (unitNum) {
+                        label = `Unit ${unitNum}`;
+                    } else {
+                        label = 'Unnamed Unit';
+                    }
+                    return `<div class="detail-item"><span class="detail-item-name">${escHtml(label)}</span></div>`;
+                }).join(''),
+                voidUnits.length > 0 ? 'text-amber' : 'text-green'
+            )}
+            <div class="kpi-card">
+                <div class="kpi-card-label">Occupancy Rate</div>
+                <div class="kpi-card-value ${Number(occupancyRate) >= 90 ? 'text-green' : Number(occupancyRate) >= 80 ? 'text-amber' : 'text-red'}">${occupancyRate}%</div>
+                <div class="progress-bar"><div class="progress-bar-fill ${Number(occupancyRate) >= 90 ? 'green' : Number(occupancyRate) >= 80 ? 'amber' : 'red'}" style="width:${occupancyRate}%"></div></div>
+            </div>
+        `;
+
+        // ── SECTION 3: Tenancy Metrics ── (all filters require active tenant status)
+        const activeTenancies = tenancies.filter(r => isTenancyActive(getField(r, F.tenPayStatus)) && isTenantStatusActive(r));
+        const inPaymentTenancies = tenancies.filter(r => getPaymentStatusName(getField(r, F.tenPayStatus)) === 'In Payment' && isTenantStatusActive(r));
+        const cfvTenancies = tenancies.filter(r => getPaymentStatusName(getField(r, F.tenPayStatus)) === 'CFV' && isTenantStatusActive(r));
+        const cfvActionedTenancies = tenancies.filter(r => getPaymentStatusName(getField(r, F.tenPayStatus)) === 'CFV Actioned' && isTenantStatusActive(r));
+        const paidRate = activeTenancies.length > 0 ? (inPaymentTenancies.length / activeTenancies.length * 100).toFixed(2) : '0.00';
+
+        const tenancyDetailList = (list) => [...list]
+            .sort((a, b) => (getNumVal(a, F.tenDueDay, 99)) - (getNumVal(b, F.tenDueDay, 99)))
+            .map(r => {
+                const dueDay = getNumVal(r, F.tenDueDay, null);
+                const dueDayStr = dueDay ? `Day ${dueDay}` : '—';
+                return `<div class="detail-item"><span class="detail-item-name"><span style="color:var(--text-secondary);min-width:52px;display:inline-block">${escHtml(dueDayStr)}</span>${escHtml(String(getField(r, F.tenSurname) || ''))} – ${escHtml(String(getField(r, F.tenRef) || ''))}</span><span class="detail-item-value">${fmt(Number(getField(r, F.tenRent)) || 0)}</span></div>`;
+            })
+            .join('');
+
+        const allTenancyDetails = [...activeTenancies]
+            .sort((a, b) => (getNumVal(a, F.tenDueDay, 99)) - (getNumVal(b, F.tenDueDay, 99)))
+            .map(r => {
+                const dueDay = getNumVal(r, F.tenDueDay, null);
+                const dueDayStr = dueDay ? `Day ${dueDay}` : '—';
+                return `<div class="detail-item"><span class="detail-item-name"><span style="color:var(--text-secondary);min-width:52px;display:inline-block">${escHtml(dueDayStr)}</span>${escHtml(String(getField(r, F.tenSurname) || ''))} – ${escHtml(String(getField(r, F.tenRef) || ''))} (${getPaymentStatusName(getField(r, F.tenPayStatus))})</span><span class="detail-item-value">${fmt(Number(getField(r, F.tenRent)) || 0)}</span></div>`;
+            })
+            .join('');
+
+        // Detect potential CFVs for the alert badge on the Leadership Dashboard.
+        // Use the same early-payment-aware arrears check as the CFV tab so this
+        // count always matches what the tab shows. The old inline check compared
+        // against the calendar-month "Paid This Month?" flag, which flagged early
+        // payers (e.g. rent due the 1st, paid the 30th of the previous month).
+        let potentialCfvCount = 0;
+        const todayForCfv = new Date();
+        todayForCfv.setHours(0,0,0,0);
+        const cfvTxIndex = (typeof buildTxByTenancyIndex === 'function') ? buildTxByTenancyIndex() : null;
+        tenancies.forEach(t => {
+            const status = getPaymentStatusName(getField(t, F.tenPayStatus)).toLowerCase().trim();
+            if (status !== 'in payment') return;
+            if (!isTenantStatusActive(t)) return;
+            const rent = Number(getField(t, F.tenRent)) || 0;
+            if (rent <= 0) return;
+            if (localStorage.getItem('cfv_dismissed_' + t.id)) return;
+            let inArrears;
+            if (typeof isCurrentlyInArrears === 'function') {
+                inArrears = isCurrentlyInArrears(t, null, todayForCfv, cfvTxIndex);
+            } else {
+                const dueDay = getNumVal(t, F.tenDueDay, 1);
+                const dueThisMonth = new Date(todayForCfv.getFullYear(), todayForCfv.getMonth(), dueDay);
+                const daysOver = todayForCfv >= dueThisMonth ? Math.floor((todayForCfv - dueThisMonth) / 86400000) : 0;
+                inArrears = daysOver >= CFV_TOLERANCE_DAYS && !getField(t, F.tenPaidThisMonth);
+            }
+            if (inArrears) potentialCfvCount++;
+        });
+
+        const potentialCfvAlert = potentialCfvCount > 0
+            ? `<div onclick="switchTab('cfv')" style="margin-top:8px;padding:8px 12px;background:var(--warning-bg);border:1px solid var(--warning);border-radius:6px;cursor:pointer;font-size:12px;color:var(--warning);display:flex;align-items:center;gap:6px">
+                <span style="font-size:16px">⚠️</span>
+                <span><strong>${potentialCfvCount} potential CFV${potentialCfvCount !== 1 ? 's' : ''}</strong> detected — click to review</span>
+                <span style="margin-left:auto;font-size:10px;color:var(--warning)">View CFVs →</span>
+               </div>`
+            : '';
+
+        document.getElementById('tenancyCards').innerHTML = `
+            ${expandableCard('Total Tenancies', activeTenancies.length, '', allTenancyDetails)}
+            ${expandableCard('In Payment', inPaymentTenancies.length, '', tenancyDetailList(inPaymentTenancies), 'text-green')}
+            ${expandableCard('CFV', cfvTenancies.length, '', tenancyDetailList(cfvTenancies), 'text-amber')}
+            ${expandableCard('CFV Actioned', cfvActionedTenancies.length, '', tenancyDetailList(cfvActionedTenancies), 'text-amber')}
+            <div class="kpi-card">
+                <div class="kpi-card-label">Paid Tenancy Rate</div>
+                <div class="kpi-card-value ${Number(paidRate) >= 80 ? 'text-green' : Number(paidRate) >= 60 ? 'text-amber' : 'text-red'}">${paidRate}%</div>
+                <div class="progress-bar"><div class="progress-bar-fill ${Number(paidRate) >= 80 ? 'green' : Number(paidRate) >= 60 ? 'amber' : 'red'}" style="width:${paidRate}%"></div></div>
+            </div>
+        `;
+
+        // Show alert banner below tenancy metrics if potential CFVs detected
+        const existingAlert = document.getElementById('cfvAlertBanner');
+        if (existingAlert) existingAlert.remove();
+        if (potentialCfvAlert) {
+            const alertDiv = document.createElement('div');
+            alertDiv.id = 'cfvAlertBanner';
+            alertDiv.innerHTML = potentialCfvAlert;
+            document.getElementById('tenancyCards').parentElement.appendChild(alertDiv);
+        }
+
+        // ── SECTION 4: 31-Day Operational Metrics ──
+        const thirtyDaysAgo = new Date(today);
+        thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+        // Compare date STRINGS (YYYY-MM-DD), not Date objects. new Date('YYYY-MM-DD')
+        // parses as UTC midnight, which during BST is 1h AFTER local midnight — so
+        // today's transactions fell outside the window for half the year.
+        const windowStartKey = dateKey(thirtyDaysAgo);
+        const windowEndKey = dateKey(today);
+        const recentTx = transactions.filter(r => {
+            const d = String(getField(r, F.txDate) || '').slice(0, 10);
+            return d && d >= windowStartKey && d <= windowEndKey;
+        });
+
+        function txBySubCat(recIds) {
+            return recentTx.filter(r => {
+                const sc = getField(r, F.txSubCategory);
+                if (!sc) return false;
+                if (Array.isArray(sc)) return sc.some(id => recIds.includes(id));
+                return recIds.includes(sc);
+            });
+        }
+
+        const rentalIncTx = txBySubCat([REC.subRentalInc]);
+        const rentalInc30 = rentalIncTx.reduce((s, r) => s + (Number(getField(r, F.txReportAmount)) || 0), 0);
+
+        const maintTx = txBySubCat([REC.subMaint]);
+        const maintSpend = Math.abs(maintTx.reduce((s, r) => s + (Number(getField(r, F.txReportAmount)) || 0), 0));
+        const maintPct = rentalInc30 > 0 ? (maintSpend / rentalInc30 * 100).toFixed(1) : '0.0';
+
+        const wagesTx = txBySubCat([REC.subOpexLabour, REC.subCOGSLabour]);
+        const wagesSpend = Math.abs(wagesTx.reduce((s, r) => s + (Number(getField(r, F.txReportAmount)) || 0), 0));
+        const wagesPct = rentalInc30 > 0 ? (wagesSpend / rentalInc30 * 100).toFixed(1) : '0.0';
+
+        const cfvExposureTenancies = [...cfvTenancies, ...cfvActionedTenancies];
+        const cfvExposure = cfvExposureTenancies.reduce((s, r) => s + (Number(getField(r, F.tenRent)) || 0), 0);
+        const cfvExposurePct = monthlyIncome > 0 ? (cfvExposure / monthlyIncome * 100).toFixed(1) : '0.0';
+
+        const txDetailList = (list, showTeamMember = false) => [...list]
+            .sort((a, b) => new Date(getField(b, F.txDate)) - new Date(getField(a, F.txDate)))
+            .map(r => {
+                const label = showTeamMember
+                    ? (() => {
+                        const tm = txTeamMemberName(r);
+                        const base = txLabel(r);
+                        return tm ? `${tm} — ${base}` : base;
+                      })()
+                    : txLabel(r);
+                return `<div class="detail-item"><span class="detail-item-name">${escHtml(getField(r, F.txDate) || '')} — ${escHtml(label)}</span><span class="detail-item-value">${fmt(Math.abs(Number(getField(r, F.txReportAmount)) || 0))}</span></div>`;
+            })
+            .join('');
+
+        // Targets — fixed £ amounts for variable costs
+        // Budget constants (also used by cash flow forecast which runs outside this function)
+        // Defined at module level — see below
+
+        // Variable cost reserve (sum of budgets)
+        const variableCostReserve = MAINT_TARGET_GBP + WAGES_TARGET_GBP + CFV_TARGET_GBP; // £4,000
+        // Required operating cushion = clear profit target + variable cost budgets.
+        // The operating cushion must be big enough to absorb variable costs AND still leave the
+        // clear profit target behind — anything less means we're eating into the profit target.
+        const requiredOperatingCushion = CLEAR_PROFIT_TARGET + variableCostReserve; // £14,000
+
+        // Traffic light uses £ targets now (actual vs budget)
+        const maintNum = maintSpend;
+        const wagesNum = wagesSpend;
+        const cfvNum = cfvExposure;
+
+        function targetProgressBarGBP(actual, target) {
+            const tl = trafficLight(actual, target);
+            const maxVal = target * 2;
+            const w = Math.min(actual / maxVal * 100, 100);
+            const targetPos = Math.min(target / maxVal * 100, 100);
+            return `<div class="progress-bar">
+                <div class="progress-bar-fill ${tl}" style="width:${w}%"></div>
+                <div style="position:absolute;left:${targetPos}%;top:0;bottom:0;width:2px;background:var(--forest-900);border-radius:1px" title="Budget: ${fmt(target)}"></div>
+            </div>`;
+        }
+
+        // Operating cushion progress towards target
+        const ocProgressPct = requiredOperatingCushion > 0 ? Math.min(operatingCushionHigh / requiredOperatingCushion * 100, 150).toFixed(1) : '0.0';
+        const ocOnTrack = operatingCushionHigh >= requiredOperatingCushion;
+
+        document.getElementById('operationalCards').innerHTML = `
+            ${expandableCard('Rental Income (31d)', fmt(rentalInc30), 'Actual from transactions',
+                txDetailList(rentalIncTx) + `<div class="detail-total"><span>Total</span><span>${fmt(rentalInc30)}</span></div>`,
+                'text-green'
+            )}
+            ${expandableCard('Maintenance Spend (31d)', fmt(maintSpend),
+                `${maintPct}% of rent | Budget: ${fmt(MAINT_TARGET_GBP)} | ${maintSpend <= MAINT_TARGET_GBP ? '<span class="text-green">Under budget</span>' : maintSpend <= MAINT_TARGET_GBP * 1.1 ? '<span class="text-amber">On budget</span>' : '<span class="text-red">Over budget</span>'}`,
+                txDetailList(maintTx) + `<div class="detail-total"><span>Total</span><span>${fmt(maintSpend)}</span></div>`,
+                trafficLightClass(maintNum, MAINT_TARGET_GBP),
+                targetProgressBarGBP(maintNum, MAINT_TARGET_GBP)
+            )}
+            ${expandableCard('Wages Spend (31d)', fmt(wagesSpend),
+                `${wagesPct}% of rent | Budget: ${fmt(WAGES_TARGET_GBP)} | ${wagesSpend <= WAGES_TARGET_GBP ? '<span class="text-green">Under budget</span>' : wagesSpend <= WAGES_TARGET_GBP * 1.1 ? '<span class="text-amber">On budget</span>' : '<span class="text-red">Over budget</span>'}`,
+                txDetailList(wagesTx, true) + `<div class="detail-total"><span>Total</span><span>${fmt(wagesSpend)}</span></div>`,
+                trafficLightClass(wagesNum, WAGES_TARGET_GBP),
+                targetProgressBarGBP(wagesNum, WAGES_TARGET_GBP)
+            )}
+            ${expandableCard('CFV Exposure', fmt(cfvExposure),
+                `${cfvExposurePct}% of income | Budget: ${fmt(CFV_TARGET_GBP)} | ${cfvExposure <= CFV_TARGET_GBP ? '<span class="text-green">Under budget</span>' : cfvExposure <= CFV_TARGET_GBP * 1.1 ? '<span class="text-amber">On budget</span>' : '<span class="text-red">Over budget</span>'}`,
+                [...cfvExposureTenancies].sort((a,b) => (Number(getField(a, F.tenDueDay))||99) - (Number(getField(b, F.tenDueDay))||99))
+                    .map(r => {
+                        const dueDay = getNumVal(r, F.tenDueDay, null);
+                        const dueDayStr = dueDay ? `Day ${dueDay}` : '—';
+                        return `<div class="detail-item"><span class="detail-item-name"><span style="color:var(--text-secondary);min-width:52px;display:inline-block">${escHtml(dueDayStr)}</span>${escHtml(String(getField(r, F.tenSurname) || ''))} – ${escHtml(String(getField(r, F.tenRef) || ''))}</span><span class="detail-item-value">${fmt(Number(getField(r, F.tenRent)) || 0)}</span></div>`;
+                    })
+                    .join('') + `<div class="detail-total"><span>Total</span><span>${fmt(cfvExposure)}</span></div>`,
+                trafficLightClass(cfvNum, CFV_TARGET_GBP),
+                targetProgressBarGBP(cfvNum, CFV_TARGET_GBP)
+            )}
+            <div class="kpi-card clickable" onclick="toggleCard(this)">
+                <div class="kpi-card-label">Target Operating Cushion (plan) <span class="chevron">▸</span></div>
+                <div class="kpi-card-value"><span class="${ocOnTrack ? 'text-green' : 'text-amber'}">£${Math.floor(operatingCushionHigh).toLocaleString('en-GB')}</span><span style="color:var(--text-muted);font-size:20px;margin:0 4px">/</span><span style="color:var(--text-primary)">£${Math.floor(requiredOperatingCushion).toLocaleString('en-GB')}</span></div>
+                <div class="kpi-card-sub">${ocProgressPct}% of target | ${ocOnTrack ? `<span class="text-green">On track — ${fmt(CLEAR_PROFIT_TARGET)} clear profit</span>` : `<span class="text-red">Shortfall: ${fmt(requiredOperatingCushion - operatingCushionHigh)}</span>`}</div>
+                <div class="progress-bar" style="position:relative">
+                    <div class="progress-bar-fill ${ocOnTrack ? 'green' : 'amber'}" style="width:${Math.min(Number(ocProgressPct), 100)}%"></div>
+                </div>
+                <div class="kpi-card-detail">
+                    <div>
+                        <div class="od-breakdown-row"><span>Maintenance budget</span><span>${fmt(MAINT_TARGET_GBP)}</span></div>
+                        <div class="od-breakdown-row"><span>Wages budget</span><span>${fmt(WAGES_TARGET_GBP)}</span></div>
+                        <div class="od-breakdown-row"><span>CFV allowance</span><span>${fmt(CFV_TARGET_GBP)}</span></div>
+                        <div class="od-breakdown-row" style="border-top:1px solid var(--border-default);margin-top:4px;padding-top:4px"><span>Variable cost reserve</span><span style="font-weight:600">${fmt(variableCostReserve)}</span></div>
+                        <div class="od-breakdown-row"><span>Clear profit target</span><span style="font-weight:600">${fmt(CLEAR_PROFIT_TARGET)}</span></div>
+                        <div class="od-breakdown-row" style="border-top:1px solid var(--border-default);margin-top:4px;padding-top:4px;font-weight:600;color:var(--text-primary)"><span>Required operating cushion</span><span>${fmt(requiredOperatingCushion)}</span></div>
+                    </div>
+                </div>
+            </div>
+            <div id="agentKpiCard"></div>
+            <div id="agentApprovalCard"></div>
+            <div id="aiShareCard"></div>
+        `;
+        loadAgentKpi();
+        loadAgentApprovalKpi();
+        loadAiShareKpi();
+
+        // ── SECTION 5: 31-Day Cash Flow Forecast ──
+        // Build UC tenant map: tenant record ID → true if Universal Credit
+        const ucTenantIds = new Set();
+        tenants.forEach(t => {
+            const payType = getField(t, F.tenantPayType);
+            const typeName = typeof payType === 'string' ? payType : (payType && payType.name ? payType.name : '');
+            if (typeName.toLowerCase().includes('universal credit')) {
+                ucTenantIds.add(t.id);
+            }
+        });
+        // Build tenancy → isUC map via linked tenant
+        // Linked field returns [{id: "recXXX", name: "..."}, ...] objects
+        const tenancyIsUC = {};
+        tenancies.forEach(r => {
+            const linked = getField(r, F.tenLinkedTenant);
+            if (Array.isArray(linked)) {
+                tenancyIsUC[r.id] = linked.some(item => {
+                    const tenantId = typeof item === 'string' ? item : (item && item.id ? item.id : null);
+                    return tenantId && ucTenantIds.has(tenantId);
+                });
+            }
+        });
+
+        // ── SECTION 6: AI Analysis ──
+        // Credit card balances
+        const lloydsCCRec = accounts.find(r => r.id === REC.lloydsCreditCard);
+        const amexRec = accounts.find(r => r.id === REC.americanExpress);
+        const santanderCCRec = accounts.find(r => r.id === REC.santanderCC);
+        const lloydsCCBal = Number(getField(lloydsCCRec, F.accGBP)) || 0;
+        const amexBal = Number(getField(amexRec, F.accGBP)) || 0;
+        const santanderCCBal = Number(getField(santanderCCRec, F.accGBP)) || 0;
+        const lloydsCCOwed = Math.abs(lloydsCCBal);
+        const amexOwed = Math.max(0, amexBal);
+        const santanderCCOwed = Math.max(0, santanderCCBal);
+        const totalCCDebt = lloydsCCOwed + amexOwed + santanderCCOwed;
+
+        const creditCards = [
+            { name: 'American Express', owed: amexOwed, dueDay: 28, recId: REC.americanExpress },
+            { name: 'Santander Credit Card', owed: santanderCCOwed, dueDay: 14, recId: REC.santanderCC },
+            { name: 'Lloyds Credit Card', owed: lloydsCCOwed, dueDay: 21, recId: REC.lloydsCreditCard },
+        ].filter(c => c.owed > 0.01);
+
+        // ── Interest rate estimation from transaction history ──
+        const threeMonthsAgo = new Date(today);
+        threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+        const cutoff3m = threeMonthsAgo.toISOString().slice(0, 10);
+
+        function txMatchesAccount(tx, accountRecId) {
+            const link = getField(tx, F.txAccountLink) || [];
+            return (Array.isArray(link) ? link : []).some(v => (v.id || v) === accountRecId);
+        }
+
+        creditCards.forEach(card => {
+            const interestTxs = (allTransactions || []).filter(tx => {
+                const desc = String(getField(tx, F.txDescription) || '').toUpperCase();
+                const date = (getField(tx, F.txDate) || '').slice(0, 10);
+                return date >= cutoff3m && txMatchesAccount(tx, card.recId) && desc.includes('INTEREST') && !desc.includes('CREDIT FOR');
+            });
+            const totalInterest = interestTxs.reduce((s, tx) => s + Math.abs(Number(getField(tx, F.txAmount)) || 0), 0);
+            const months = interestTxs.length > 0 ? Math.max(1, interestTxs.length) : 0;
+            card.avgMonthlyInterest = months > 0 ? totalInterest / months : 0;
+            card.estMonthlyRate = card.owed > 0 && card.avgMonthlyInterest > 0 ? card.avgMonthlyInterest / card.owed : 0;
+            card.estAPR = card.estMonthlyRate * 12;
+            card.minPayment = card.avgMonthlyInterest > 0 ? Math.max(25, card.owed * 0.01 + card.avgMonthlyInterest) : Math.max(25, card.owed * 0.025);
+        });
+
+        const defaultPayment = Math.max(0, Math.floor(operatingCushionLow));
+        window._ccStrategyCards = creditCards;
+        window._ccDefaultPayment = defaultPayment;
+
+        const cashFlowRows = buildCashFlow(today, openingBalance, incTenancies, activeCosts, tenancies, transactions, monthlyIncome, tenancyIsUC, creditCards);
+
+        const voidCostPerMonth = monthlyIncome > 0 && occupiedCount > 0
+            ? (monthlyIncome / occupiedCount).toFixed(0)
+            : 0;
+
+        const cfvUnactioned = cfvTenancies.reduce((s, r) => s + (Number(getField(r, F.tenRent)) || 0), 0);
+
+        // ── AI COMMENTARY — titled sections ──
+        const maintStatus = maintSpend < MAINT_TARGET_GBP ? 'green' : maintSpend <= MAINT_TARGET_GBP * 1.1 ? 'amber' : 'red';
+        const wagesStatus = wagesSpend < WAGES_TARGET_GBP ? 'green' : wagesSpend <= WAGES_TARGET_GBP * 1.1 ? 'amber' : 'red';
+
+        document.getElementById('aiCommentary').innerHTML = `
+            <h3 class="od-section-header">Financial Health</h3>
+            <p>The portfolio generates ${fmt(inPaymentIncome)} confirmed monthly income (In Payment) with a further ${fmt(cfvActionedIncome)} from ${cfvActionedCount} CFV Actioned tenancies, giving a best-case total of ${fmt(monthlyIncome)}. Against ${fmt(monthlyCosts)} in fixed costs, the operating cushion margin ranges from ${operatingCushionMarginLow}% to ${operatingCushionMarginHigh}%. ${Number(operatingCushionMarginHigh) >= 40 ? 'The upper range is healthy.' : 'Margins are tight — cost reduction or occupancy gains are needed.'}</p>
+
+            <h3 class="od-section-header" style="margin:16px 0 8px">Operating Cushion Target</h3>
+            <p>Target operating cushion: ${fmt(requiredOperatingCushion)}/month (${fmt(CLEAR_PROFIT_TARGET)} clear profit + ${fmt(variableCostReserve)} variable costs: ${fmt(MAINT_TARGET_GBP)} maintenance, ${fmt(WAGES_TARGET_GBP)} wages, ${fmt(CFV_TARGET_GBP)} CFV allowance). Current best-case operating cushion is ${fmt(operatingCushionHigh)} — ${ocOnTrack ? `a surplus of ${fmt(operatingCushionHigh - requiredOperatingCushion)} above target. You are on track.` : `a shortfall of ${fmt(requiredOperatingCushion - operatingCushionHigh)} (${ocProgressPct}% of target). Focus on filling voids and converting CFVs to close the gap.`}</p>
+
+            <h3 class="od-section-header" style="margin:16px 0 8px">Operational Performance (31-Day)</h3>
+            <p>Actual rental income over 31 days: ${fmt(rentalInc30)}. Maintenance spend of ${fmt(maintSpend)} is ${maintStatus === 'green' ? 'under' : maintStatus === 'amber' ? 'on' : 'over'} the ${fmt(MAINT_TARGET_GBP)} budget${maintStatus === 'red' ? ' — investigate whether reactive costs can shift to planned maintenance' : ''}. Wages at ${fmt(wagesSpend)} are ${wagesStatus === 'green' ? 'under' : wagesStatus === 'amber' ? 'on' : 'over'} the ${fmt(WAGES_TARGET_GBP)} budget.</p>
+
+            <h3 class="od-section-header" style="margin:16px 0 8px">Occupancy &amp; Voids</h3>
+            <p>Occupancy is ${occupancyRate}% with ${voidUnits.length} void${voidUnits.length !== 1 ? 's' : ''}. Each void costs roughly £${voidCostPerMonth}/month in lost income. ${voidUnits.length > 0 ? `Filling ${Math.min(3, voidUnits.length)} void${Math.min(3, voidUnits.length) !== 1 ? 's' : ''} would add ${fmt(Math.min(3, voidUnits.length) * Number(voidCostPerMonth))}/month — the highest-ROI lever available.` : 'Full occupancy — excellent.'}</p>
+
+            <h3 class="od-section-header" style="margin:16px 0 8px">CFV Risk</h3>
+            <p>CFV exposure is ${fmt(cfvExposure)} against a ${fmt(CFV_TARGET_GBP)} monthly allowance (${cfvExposure <= CFV_TARGET_GBP ? 'within budget' : 'over budget by ' + fmt(cfvExposure - CFV_TARGET_GBP)}). ${cfvTenancies.length > 0 ? `${cfvTenancies.length} remain unactioned (${fmt(cfvUnactioned)}) — actioning these improves income certainty.` : 'All CFVs actioned — good.'}</p>
+
+            <h3 class="od-section-header" style="margin:16px 0 8px">Quick Wins</h3>
+            <p>${voidUnits.length > 0 ? '(1) Fill voids — biggest revenue impact per action. ' : ''}${cfvTenancies.length > 0 ? `(${voidUnits.length > 0 ? '2' : '1'}) Action ${cfvTenancies.length} unactioned CFV${cfvTenancies.length !== 1 ? 's' : ''} to secure ${fmt(cfvUnactioned)}/month. ` : ''}${maintStatus !== 'green' ? `(${(voidUnits.length > 0 ? 1 : 0) + (cfvTenancies.length > 0 ? 1 : 0) + 1}) Reduce maintenance from ${fmt(maintSpend)} to below ${fmt(MAINT_TARGET_GBP)} budget. ` : ''}Monitor cash flow pinch points around mortgage payment clusters (typically days 1-6).</p>
+
+            <hr style="border:none;border-top:1px solid var(--border-default);margin:20px 0;">
+            <h3 class="od-section-header" style="margin:0 0 12px">Credit Card Debt</h3>
+            <p style="margin:0 0 8px">Total credit card debt: <strong>${fmt(totalCCDebt)}</strong>. Card balances and clearance projections are shown below the cash flow forecast table.</p>
+            ${creditCards.length > 0 ? `
+            <div id="ccPaymentStrategy" style="margin-top:16px;padding:16px;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:var(--radius-md)">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                    <span style="font-weight:var(--fw-semibold);color:var(--text-primary)">Payment Strategy</span>
+                    <label style="font-size:var(--fs-sm);color:var(--text-secondary)">Payment:
+                        <input id="ccPaymentInput" type="number" min="0" step="50" value="${defaultPayment}"
+                            style="width:90px;margin-left:4px;padding:4px 8px;border:1px solid var(--border-default);border-radius:var(--radius-sm);font-size:var(--fs-sm);background:var(--bg-app);color:var(--text-primary)"
+                        />
+                    </label>
+                </div>
+                <p style="margin:0 0 10px;font-size:var(--fs-xs);color:var(--text-muted)">Avalanche method: pay minimums on all cards, direct remaining funds to the highest-interest card first. This minimises total interest paid.</p>
+                <div id="ccStrategyRows"></div>
+                <div id="ccStrategySummary" style="margin-top:10px;font-size:var(--fs-xs);color:var(--text-secondary)"></div>
+            </div>` : ''}
+        `;
+
+        // ── Payment strategy recalculation ──
+        function recalcCCStrategy(totalPayment) {
+            const cards = window._ccStrategyCards || [];
+            if (!cards.length) return;
+            const sorted = [...cards].sort((a, b) => b.estAPR - a.estAPR);
+            const totalMin = sorted.reduce((s, c) => s + c.minPayment, 0);
+            const effectivePayment = Math.max(totalPayment, totalMin);
+            let surplus = effectivePayment - totalMin;
+
+            sorted.forEach(c => { c.allocation = c.minPayment; });
+            for (const c of sorted) {
+                if (surplus <= 0) break;
+                const extra = Math.min(surplus, c.owed - c.allocation);
+                if (extra > 0) { c.allocation += extra; surplus -= extra; }
+            }
+
+            const rowsEl = document.getElementById('ccStrategyRows');
+            const summaryEl = document.getElementById('ccStrategySummary');
+            if (!rowsEl) return;
+
+            rowsEl.innerHTML = sorted.map(c => {
+                const aprStr = c.estAPR > 0 ? (c.estAPR * 100).toFixed(1) + '% APR' : '0% (no interest detected)';
+                const pct = effectivePayment > 0 ? Math.round(c.allocation / effectivePayment * 100) : 0;
+                return `<div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid var(--border-subtle);font-size:var(--fs-sm);gap:8px">
+                    <span style="flex:1;min-width:0"><span style="font-weight:var(--fw-medium)">${escHtml(c.name)}</span> <span style="color:var(--text-muted);font-size:var(--fs-xs)">${escHtml(aprStr)}</span></span>
+                    <span style="width:80px;text-align:right;color:var(--text-secondary);font-size:var(--fs-xs)">bal ${fmt(c.owed)}</span>
+                    <span style="width:70px;text-align:right;font-weight:var(--fw-semibold);color:var(--accent)">${fmt(c.allocation)}</span>
+                    <span style="width:40px;text-align:right;font-size:var(--fs-xs);color:var(--text-muted)">${pct}%</span>
+                </div>`;
+            }).join('');
+
+            const totalInterestPerMonth = sorted.reduce((s, c) => {
+                const remaining = Math.max(0, c.owed - c.allocation);
+                return s + remaining * c.estMonthlyRate;
+            }, 0);
+
+            if (summaryEl) {
+                const minNote = effectivePayment > totalPayment ? `Minimum payments total ${fmt(totalMin)}, so the effective payment is ${fmt(effectivePayment)}. ` : '';
+                summaryEl.textContent = `${minNote}Estimated interest next month: ${fmt(totalInterestPerMonth)}. ${sorted[0] && sorted[0].estAPR > 0 ? sorted[0].name + ' has the highest rate and receives priority.' : 'No interest detected on any card.'}`;
+            }
+        }
+
+        // Initial render + attach listener
+        setTimeout(() => {
+            recalcCCStrategy(defaultPayment);
+            const inp = document.getElementById('ccPaymentInput');
+            if (inp) inp.addEventListener('input', () => recalcCCStrategy(Number(inp.value) || 0));
+        }, 0);
+
+        // (Removed) — the "Last bank sync" footer was dropped from index.html; the
+        // Fintable Sync Monitor OS page surfaces this same timestamp more clearly.
+
+        // Store computed state for AI context
+        if (typeof updateDashboardState === 'function') {
+            updateDashboardState({
+                openingBalance, santBal, zempBal,
+                monthlyIncome, inPaymentIncome, monthlyCosts,
+                operatingCushionHigh, operatingCushionLow, operatingCushionMarginHigh, operatingCushionMarginLow,
+                activeTenanciesCount: activeTenancies.length,
+                inPaymentCount: inPaymentTenancies.length,
+                cfvCount: cfvTenancies.length,
+                cfvActionedCount: cfvActionedTenancies.length,
+                cfvExposure, rentalInc30, maintSpend, wagesSpend,
+                occupancyRate,
+                unreconciledCount: unreconciledTx.length,
+            });
+        }
+
+        // ── Sync Bar + Health Checks ──
+        // Re-register on every render so check closures capture the latest scope.
+        // markTabSynced(...) is called below to bump the lastSyncedAt and roll up
+        // the health pill.
+        if (typeof registerSyncBar === 'function') {
+            registerSyncBar('overview', {
+                refreshFn: () => loadDashboard(),
+                checks: [
+                    // ─── DATA SYNC ───
+                    {
+                        name: 'Santander balance loaded', kind: 'sync', run: () => {
+                            const rec = (allAccounts || []).find(r => r.id === REC.santander);
+                            if (!rec) return { status: 'fail', detail: 'Santander account record not found in Airtable response' };
+                            const bal = Number(getField(rec, F.accGBP));
+                            const lastSync = getField(rec, F.accLastUpdate) || 'unknown';
+                            if (Number.isNaN(bal)) return { status: 'fail', detail: 'Balance field is not a number' };
+                            return { status: 'pass', detail: `${fmtAccounting(bal)} · last bank sync ${lastSync}` };
+                        }
+                    },
+                    {
+                        name: 'TNT Zempler balance loaded', kind: 'sync', run: () => {
+                            const rec = (allAccounts || []).find(r => r.id === REC.tntZempler);
+                            if (!rec) return { status: 'fail', detail: 'TNT Zempler account record not found' };
+                            const bal = Number(getField(rec, F.accGBP));
+                            const lastSync = getField(rec, F.accLastUpdate) || 'unknown';
+                            if (Number.isNaN(bal)) return { status: 'fail', detail: 'Balance field is not a number' };
+                            return { status: 'pass', detail: `${fmtAccounting(bal)} · last bank sync ${lastSync}` };
+                        }
+                    },
+                    {
+                        name: 'Active tenancies fetched', kind: 'sync', run: () => {
+                            const n = (allTenancies || []).filter(r => isTenantStatusActive(r) && isTenancyActive(getField(r, F.tenPayStatus))).length;
+                            if (n === 0) return { status: 'fail', detail: 'No active tenancies — fetch likely returned empty' };
+                            if (n < 30) return { status: 'warn', detail: `${n} active tenancies — fewer than expected (~60+)` };
+                            return { status: 'pass', detail: `${n} active tenancies (In Payment / CFV / CFV Actioned)` };
+                        }
+                    },
+                    {
+                        name: 'Active costs fetched', kind: 'sync', run: () => {
+                            const n = (allCosts || []).filter(r => isCostActive(r)).length;
+                            if (n === 0) return { status: 'fail', detail: 'No active costs — fetch likely returned empty' };
+                            return { status: 'pass', detail: `${n} active costs loaded` };
+                        }
+                    },
+                    {
+                        name: 'Recent reconciled transactions present', kind: 'sync', run: () => {
+                            const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - 7);
+                            const cutoffStr = cutoff.toISOString().slice(0, 10);
+                            const recent = (allTransactions || []).filter(r => getField(r, F.txReconciled) && getField(r, F.txDate) >= cutoffStr);
+                            if (recent.length === 0) return { status: 'warn', detail: 'No reconciled transactions in the last 7 days — bank sync may be stale' };
+                            return { status: 'pass', detail: `${recent.length} reconciled transactions in the last 7 days` };
+                        }
+                    },
+                    {
+                        name: 'Unreconciled transactions list available', kind: 'sync', run: () => {
+                            const n = (allTransactions || []).filter(r => !getField(r, F.txReconciled) && isOurAccount(getField(r, F.txAccountAlias))).length;
+                            return { status: 'pass', detail: `${n} unreconciled (Santander + TNT Zempler) — surfaced in the Unreconciled card` };
+                        }
+                    },
+                    // ─── AUTOMATIONS ───
+                    {
+                        name: 'Smart refresh timer is running', kind: 'automation', run: () => {
+                            if (refreshTimer == null) return { status: 'warn', detail: 'No interval timer set — page will not auto-refresh' };
+                            return { status: 'pass', detail: `Auto-refresh every ${REFRESH_INTERVAL / 60000} min while idle` };
+                        }
+                    },
+                    {
+                        name: 'AI Reconciliation Accuracy log writing to Airtable', kind: 'automation', run: () => {
+                            if (typeof getReconAccuracyStats !== 'function') return { status: 'warn', detail: 'Stats function not available' };
+                            const stats = getReconAccuracyStats();
+                            if (!stats) return { status: 'warn', detail: 'No entries logged yet (or first load — stats refresh in background)' };
+                            return { status: 'pass', detail: `${stats.accurate}/${stats.total} accurate (last 31 days) · ${stats.pct}%` };
+                        }
+                    },
+                    {
+                        name: 'Strategic KPIs auto-compute', kind: 'automation', run: () => {
+                            const projects = (typeof _strategicKpiProjects !== 'undefined' ? _strategicKpiProjects : []) || [];
+                            if (!projects.length) return { status: 'warn', detail: 'Projects table not yet loaded (loads in background)' };
+                            const auto = projects.filter(p => p.kpiAutomated);
+                            const computed = auto.filter(p => p.kpiCurrent != null && p.kpiCurrent !== 0);
+                            if (auto.length === 0) return { status: 'pass', detail: 'No automated-KPI projects — nothing to compute' };
+                            return { status: 'pass', detail: `${computed.length}/${auto.length} automated KPIs have a current value` };
+                        }
+                    },
+                    {
+                        name: 'Cash flow forecast renderable', kind: 'automation', run: () => {
+                            if (typeof buildCashFlow !== 'function') return { status: 'fail', detail: 'buildCashFlow() not loaded' };
+                            const rows = window._cfRows;
+                            if (!Array.isArray(rows) || rows.length === 0) return { status: 'warn', detail: 'Forecast not yet rendered' };
+                            return { status: 'pass', detail: `${rows.length} days projected` };
+                        }
+                    },
+                    {
+                        name: 'Dashboard cache is fresh', kind: 'automation', run: () => {
+                            // The IDB cache backs instant reloads. Stale cache means slow next-load.
+                            // We only warn here — the live data is fine; next refresh will re-cache.
+                            try {
+                                const raw = localStorage.getItem('_dlr_pat');
+                                if (!raw) return { status: 'warn', detail: 'No PAT in localStorage' };
+                            } catch (_) {}
+                            return { status: 'pass', detail: 'IDB cache will be refreshed on next load' };
+                        }
+                    },
+                ],
+            });
+            markTabSynced('overview');
+        }
+
+        // Money Confidence mirrors this data — tell it a fresh data load just
+        // landed so its "Safe to act today" figure re-renders (cheap local
+        // recompute over the globals set above; no extra fetches).
+        if (typeof notifyMoneyDataUpdated === 'function') {
+            try { notifyMoneyDataUpdated(); } catch (e) { console.warn('[renderDashboard] money re-render failed:', e); }
+        }
+    }

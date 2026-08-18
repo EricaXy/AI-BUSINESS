@@ -1,0 +1,55 @@
+/* ──────────────────────────────────────────────────────────────────
+   Quick Task — floating "+ Task" FAB. The actual capture UI is the
+   inline-add bar rendered inside os/tasks/index.html (which then
+   opens the Task Drawer). This stylesheet only owns the FAB itself,
+   so it stays lean and is safely loaded by every iframe page.
+   Depends only on css/tokens.css.
+   ────────────────────────────────────────────────────────────────── */
+
+.qt-fab {
+  position: fixed;
+  right: 20px;
+  bottom: 90px;        /* above the AI bubble (which sits at bottom:20px) */
+  z-index: 9998;       /* below modal overlays (10000) but above content */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 44px;
+  padding: 0 16px 0 12px;
+  border: none;
+  border-radius: var(--radius-full, 999px);
+  background: var(--accent, #2C6E49);
+  color: #fff;
+  font-family: var(--font-family-base, inherit);
+  font-size: 13px;
+  font-weight: var(--fw-semibold, 600);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(28, 36, 34, 0.18), 0 2px 6px rgba(28, 36, 34, 0.12);
+  transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+.qt-fab:hover {
+  background: var(--accent-hover, #1B4A30);
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(28, 36, 34, 0.22), 0 3px 8px rgba(28, 36, 34, 0.15);
+}
+.qt-fab:active { transform: translateY(0); }
+.qt-fab-plus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+}
+.qt-fab-label { line-height: 1; }
+
+/* Compact mode for narrow viewports — drop the label, keep the plus */
+@media (max-width: 540px) {
+  .qt-fab { padding: 0 14px; }
+  .qt-fab-label { display: none; }
+}
