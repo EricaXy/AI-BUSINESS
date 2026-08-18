@@ -1,0 +1,4087 @@
+// Strategy Plan — standalone page (loaded directly or via iframe).
+// Depends on: ../../js/config.js (TABLES, OBJSTRAT, BASE_ID), ../../js/prompts/boardroom-mentor.js
+
+const AI_PROXY = 'https://claude-proxy.kevinbrittain.workers.dev';
+
+// Runtime state
+let PAT_LOCAL = '';
+let allBusinessesLocal = [];
+let currentRecord = null;   // Airtable record currently loaded (null if new)
+let isDirty = false;
+let wizardState = null;     // see wizard.js section below
+const QUARTERS = ['Q1', 'Q2', 'Q3', 'Q4'];
+let allMainMethods = null;  // Main Methods table cache: [{ id, name, description }]
+let methodLinkSel = [];     // 10 slots — Main Method record ID linked to each step (null = none)
+
+function goToDashboard() {
+    try {
+        if (window.parent && window.parent !== window && typeof window.parent.switchTab === 'function') {
+            window.parent.switchTab('overview');
+            return;
+        }
+    } catch (e) { /* cross-origin */ }
+    window.location.href = '../../index.html';
+}
+
+function authenticate() {
+    const input = document.getElementById('patInput').value.trim();
+    if (!input) return;
+    PAT_LOCAL = input;
+    // Write under BOTH keys so every other OS page finds it regardless of
+    // which storage key it happens to read (legacy 'airtable_pat' vs the
+    // shell's '_dlr_pat').
+    localStorage.setItem('_dlr_pat', input);
+    localStorage.setItem('airtable_pat', input);
+    sessionStorage.setItem('_dlr_pat', input);
+    document.getElementById('authScreen').style.display = 'none';
+    initApp();
+}
+
+(function init() {
+    // The parent shell (shared.js) stores the PAT as localStorage._dlr_pat —
+    // that's the primary. Also look up legacy keys the iframe may have
+    // written in a previous session. Same-origin iframes share localStorage
+    // with the parent, so once the shell has authenticated we inherit.
+    const patDlr = localStorage.getItem('_dlr_pat');
+    const patAirtable = localStorage.getItem('airtable_pat');
+    const patSession = sessionStorage.getItem('_dlr_pat');
+    const saved = patDlr || patAirtable || patSession;
+    if (saved) {
+        PAT_LOCAL = saved;
+        // Mirror to both keys for any other code paths that rely on either.
+        localStorage.setItem('_dlr_pat', saved);
+        sessionStorage.setItem('_dlr_pat', saved);
+        document.getElementById('authScreen').style.display = 'none';
+        initApp();
+    }
+    document.getElementById('patInput').addEventListener('keydown', e => {
+        if (e.key === 'Enter') authenticate();
+    });
+})();
+
+async function airtableFetch(path, options = {}) {
+    const url = path.startsWith('http') ? path : `https://api.airtable.com/v0/${BASE_ID}/${path}`;
+    const res = await fetch(url, {
+        ...options,
+        headers: { 'Authorization': `Bearer ${PAT_LOCAL}`, 'Content-Type': 'application/json', ...(options.headers || {}) },
+    });
+    if (!res.ok) {
+        const txt = await res.text().catch(() => '');
+        throw new Error(`${res.status} ${txt.slice(0, 200)}`);
+    }
+    return res.json();
+}
+
+async function initApp() {
+    showLoading(true);
+    try {
+        await loadBusinesses();
+        populateContextBar();
+        document.getElementById('app').style.display = 'block';
+        await autoSelectLatestRecord();
+    } catch (e) {
+        setStatus('error', `Failed to load: ${e.message}`);
+        document.getElementById('app').style.display = 'block';
+    } finally {
+        showLoading(false);
+    }
+}
+
+function showLoading(on) {
+    document.getElementById('loadingOverlay').style.display = on ? 'flex' : 'none';
+}
+
+function setStatus(kind, message) {
+    const el = document.getElementById('statusBar');
+    if (!message) { el.style.display = 'none'; return; }
+    el.className = 'status-bar ' + kind;
+    el.textContent = message;
+    el.style.display = 'block';
+}
+
+async function loadBusinesses() {
+    // Businesses table primary field is "Business Name" (singleLineText).
+    // "Business" is a lookup array — avoid it.
+    const data = await airtableFetch(`${TABLES.businesses}?pageSize=100`);
+    allBusinessesLocal = data.records.map(r => {
+        let raw = r.fields['Business Name'] ?? r.fields['Name'] ?? r.fields['Business'];
+        if (Array.isArray(raw)) raw = raw.join(', ');
+        return { id: r.id, name: raw ? String(raw) : '(unnamed)' };
+    });
+    allBusinessesLocal.sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+
+function populateContextBar() {
+    const bsel = document.getElementById('businessSel');
+    bsel.innerHTML = '<option value="">Select a business…</option>' +
+        allBusinessesLocal.map(b => `<option value="${b.id}">${escapeHtml(b.name)}</option>`).join('');
+    bsel.addEventListener('change', onContextChange);
+
+    const ysel = document.getElementById('yearSel');
+    const currentYear = new Date().getFullYear();
+    const years = [];
+    for (let y = currentYear - 1; y <= currentYear + 2; y++) years.push(y);
+    ysel.innerHTML = '<option value="">—</option>' + years.map(y => `<option>${y}</option>`).join('');
+    ysel.value = String(currentYear);
+
+    document.getElementById('quarterSel').addEventListener('change', onContextChange);
+    ysel.addEventListener('change', onContextChange);
+
+    // Set current quarter default
+    document.getElementById('quarterSel').value = currentQuarterYear().quarter;
+}
+
+function getSelection() {
+    return {
+        businessId: document.getElementById('businessSel').value,
+        quarter: document.getElementById('quarterSel').value,
+        year: document.getElementById('yearSel').value,
+    };
+}
+
+// The calendar quarter we are actually in. Used both to default the picker and
+// to tell "planning the quarter ahead" from "rewriting a finished one".
+function currentQuarterYear() {
+    const now = new Date();
+    const m = now.getMonth();
+    return {
+        quarter: m < 3 ? 'Q1' : m < 6 ? 'Q2' : m < 9 ? 'Q3' : 'Q4',
+        year: String(now.getFullYear()),
+    };
+}
+
+// True when the selected quarter has already finished. Its plan is history the
+// founder cannot recover once overwritten.
+function isPastQuarter(quarter, year) {
+    const cur = currentQuarterYear();
+    const y = parseInt(year, 10);
+    const cy = parseInt(cur.year, 10);
+    if (Number.isNaN(y)) return false;
+    if (y !== cy) return y < cy;
+    return QUARTERS.indexOf(quarter) < QUARTERS.indexOf(cur.quarter);
+}
+
+async function onContextChange() {
+    if (isDirty && !confirm('You have unsaved changes. Discard and load different record?')) return;
+    await loadRecord();
+}
+
+async function autoSelectLatestRecord() {
+    // If no business selected, leave empty state.
+    const { businessId } = getSelection();
+    if (!businessId) {
+        renderEmptyState('Pick a business to begin.');
+        return;
+    }
+    await loadRecord();
+}
+
+async function loadRecord() {
+    const { businessId, quarter, year } = getSelection();
+    if (!businessId) {
+        renderEmptyState('Pick a business to begin.');
+        return;
+    }
+    if (!quarter || !year) {
+        renderEmptyState('Pick a quarter and year to load the plan.');
+        return;
+    }
+    setStatus('info', 'Loading plan…');
+    try {
+        // Airtable link fields stringify to primary-field values (business names),
+        // not record IDs — so match on the "Business Name" formula field instead.
+        const business = allBusinessesLocal.find(b => b.id === businessId);
+        const businessName = (business?.name || '').replace(/"/g, '\\"');
+        const params = new URLSearchParams({
+            filterByFormula: `AND({Business Name} = "${businessName}", {Quarter} = "${quarter}", {Year} = "${year}")`,
+            maxRecords: '1',
+            returnFieldsByFieldId: 'true',
+        });
+        const data = await airtableFetch(`${TABLES.objStrat}?${params.toString()}`);
+        if (data.records.length) {
+            currentRecord = data.records[0];
+            renderForm(currentRecord.fields);
+            const loadedMsg = `Loaded ${quarter} ${year}.`;
+            setStatus('success', loadedMsg);
+            // Only clear our own message — a later caller (e.g. the quarter
+            // close summary) may have replaced it before this timer fires.
+            setTimeout(() => {
+                const el = document.getElementById('statusBar');
+                if (el && el.textContent === loadedMsg) setStatus('', '');
+            }, 2000);
+        } else {
+            currentRecord = null;
+            renderEmptyState(`No plan saved for ${quarter} ${year} yet. Pick how you want to start.`, { startable: true });
+            setStatus('', '');
+        }
+    } catch (e) {
+        setStatus('error', `Load failed: ${e.message}`);
+    }
+    isDirty = false;
+    updateSaveButton();
+
+    // ── Sync Bar + Health Checks ──
+    if (typeof registerSyncBar === 'function') {
+        registerSyncBar('os-strategy', {
+            refreshFn: () => loadRecord(),
+            checks: [
+                {
+                    name: 'Businesses list loaded', kind: 'sync', run: () => {
+                        const n = (typeof allBusinessesLocal !== 'undefined' ? allBusinessesLocal : []).length;
+                        if (n === 0) return { status: 'fail', detail: 'Businesses fetch returned empty — picker is unusable' };
+                        return { status: 'pass', detail: `${n} businesses available in the picker` };
+                    }
+                },
+                {
+                    name: 'Selection complete', kind: 'sync', run: () => {
+                        const sel = (typeof getSelection === 'function') ? getSelection() : {};
+                        const missing = ['businessId','quarter','year'].filter(k => !sel[k]);
+                        if (missing.length) return { status: 'warn', detail: `Pick ${missing.join(', ')} to load a plan` };
+                        return { status: 'pass', detail: `${sel.quarter} ${sel.year} for the selected business` };
+                    }
+                },
+                {
+                    name: 'Plan record loaded for current selection', kind: 'sync', run: () => {
+                        if (!currentRecord) return { status: 'warn', detail: 'No plan exists yet for this quarter — Wizard will create one' };
+                        const fieldCount = Object.keys(currentRecord.fields || {}).length;
+                        return { status: 'pass', detail: `Record ${currentRecord.id} loaded with ${fieldCount} field(s) populated` };
+                    }
+                },
+                {
+                    name: 'Save state is clean', kind: 'automation', run: () => {
+                        if (typeof isDirty !== 'undefined' && isDirty) return { status: 'warn', detail: 'Unsaved changes — click Save before navigating away' };
+                        return { status: 'pass', detail: 'No pending edits' };
+                    }
+                },
+                {
+                    name: 'AI Wizard available', kind: 'automation', run: () => {
+                        if (typeof openWizard !== 'function') return { status: 'fail', detail: 'openWizard() not loaded' };
+                        return { status: 'pass', detail: 'Boardroom Mentor wizard wired — kicks off plan from previous quarter' };
+                    }
+                },
+                {
+                    name: 'Push-to-Projects working', kind: 'automation', run: () => {
+                        if (typeof pushProjectsManually !== 'function') return { status: 'warn', detail: 'pushProjectsManually() not loaded — quarterly projects can\'t be promoted' };
+                        return { status: 'pass', detail: 'Projects table push wired — Strategy projects flow into Tasks' };
+                    }
+                },
+                {
+                    name: 'Main Method steps linked', kind: 'sync', run: () => {
+                        if (!currentRecord) return { status: 'pass', detail: 'No plan loaded yet' };
+                        const f = currentRecord.fields || {};
+                        const unlinked = OBJSTRAT.methodSteps.filter((fid, i) => {
+                            const hasText = (f[fid] || '').trim();
+                            const link = f[OBJSTRAT.mainMethodLinks[i]];
+                            return hasText && !(Array.isArray(link) && link.length);
+                        });
+                        if (unlinked.length) return { status: 'warn', detail: `${unlinked.length} step(s) have text but no linked Main Method record — the Systemisation page can't see them. Use the picker or "Create from text" in the Main Method section.` };
+                        return { status: 'pass', detail: 'Every step with text is linked to a Main Method record — Systemisation sees the full method' };
+                    }
+                },
+                {
+                    name: 'Quarter close available', kind: 'automation', run: () => {
+                        if (typeof openQuarterClose !== 'function') return { status: 'fail', detail: 'openQuarterClose() not loaded — the quarter can\'t be closed from the app' };
+                        return { status: 'pass', detail: 'Close the quarter wired — freezes the snapshot before carrying open tasks' };
+                    }
+                },
+                {
+                    name: 'PDF export available', kind: 'automation', run: () => {
+                        if (typeof html2pdf === 'undefined') return { status: 'warn', detail: 'html2pdf.js library not loaded' };
+                        return { status: 'pass', detail: 'PDF export available via the Download button' };
+                    }
+                },
+            ],
+        });
+        markTabSynced('os-strategy');
+    }
+}
+
+// `opts.startable` — true once a business, quarter and year are all chosen but
+// no record exists. Only then do we offer the two routes into a new plan;
+// before that the buttons are dead controls that reject their own click.
+function renderEmptyState(message, opts = {}) {
+    const host = document.getElementById('planForm');
+    if (!opts.startable) {
+        host.innerHTML = `<div class="empty-state">
+            <h3>Nothing here yet</h3>
+            <p>${escapeHtml(message)}</p>
+        </div>`;
+        return;
+    }
+    const { quarter, year } = getSelection();
+    const q = escapeHtml(`${quarter} ${year}`);
+    host.innerHTML = `<div class="empty-state">
+        <h3>Plan ${q}</h3>
+        <p>${escapeHtml(message)}</p>
+        <div class="empty-guide">
+            <strong>You are in the right place.</strong> ${q} is the quarter you are
+            planning, so leave it selected. Do not switch back to last quarter to start:
+            the wizard opens it for you, asks what hit and what missed, and uses it as
+            the starting point.
+        </div>
+        <div class="empty-actions">
+            <button class="btn btn-primary" onclick="openWizard()">Start AI Wizard</button>
+            <button class="btn btn-ghost" onclick="startManualPlan()">Fill in manually</button>
+        </div>
+        <p class="empty-sub">The wizard interviews you section by section and writes the
+        plan from short answers. Filling in manually opens the same form blank, with a
+        hint under every section heading.</p>
+    </div>`;
+}
+
+// Manual route into a new quarter. Without this the empty state offered the
+// wizard and nothing else, so a founder who wanted to type their own plan had
+// no form to type into.
+function startManualPlan() {
+    const { businessId, quarter, year } = getSelection();
+    if (!businessId || !quarter || !year) {
+        setStatus('warn', 'Pick a business, quarter and year first.');
+        return;
+    }
+    renderForm({});
+    // Sections fold shut when their fields are empty, which on a blank plan
+    // means every hint is hidden behind a collapsed bar. Open them so the
+    // founder sees the questions they are answering.
+    toggleAllSections(true);
+    setStatus('info', `Blank ${quarter} ${year} plan — every section is open with a hint. Fill in what you can, then Save changes.`);
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// FORM RENDERING — maps OBJSTRAT field IDs to editable inputs.
+// ═════════════════════════════════════════════════════════════════════
+
+function renderForm(fields) {
+    fields = fields || {};
+    const host = document.getElementById('planForm');
+    host.innerHTML = '';
+
+    // Populate the Owner dropdown options for kpiSubsection. Uses the
+    // same Team Members cache the push logic loads. Fire-and-forget —
+    // kpiSubsection reads window.__stratOwnerOptions synchronously so we
+    // trigger a re-render once ready if the cache wasn't warm.
+    if (!window.__stratOwnerOptions) {
+        ensureTeamMembersLoaded().then(cache => {
+            window.__stratOwnerOptions = Object.values(cache || {})
+                .filter(m => m && m.email)
+                .map(m => ({ name: m.name || m.email, email: m.email }))
+                .sort((a, b) => a.name.localeCompare(b.name));
+            // Fill the Owner dropdowns in place rather than re-rendering the
+            // form. A re-render would blank anything typed while the team
+            // fetch was in flight, and it never ran at all on a brand-new
+            // plan (currentRecord is null there), leaving Owner stuck on "—".
+            populateOwnerSelects();
+        }).catch(() => {});
+    }
+
+    // Main Methods cache for the step-link pickers. Kick off the load; when
+    // it lands, fill the pickers in. If the founder has already started
+    // editing, only the link rows are refreshed — a full re-render here
+    // would silently revert their unsaved text.
+    if (!allMainMethods) {
+        ensureMainMethodsLoaded().then(() => {
+            if (currentRecord && currentRecord.fields && !isDirty) {
+                renderForm(currentRecord.fields);
+            } else {
+                // Mid-edit, or a brand-new quarter the wizard is prefilling
+                // (no record yet) — fill the pickers in without a full
+                // re-render, which would revert unsaved text.
+                OBJSTRAT.methodSteps.forEach((fid, i) => renderMethodLinkRow(i));
+                updateMethodBulkRow();
+            }
+        }).catch(() => {});
+    }
+
+    // Seed the per-slot link selections from the record. Slot order IS the
+    // acronym order on the Systemisation page — nothing below reorders slots
+    // on its own.
+    initMethodLinkSelections(fields);
+
+    // Sticky top navigator — anchor links to every section divider/section.
+    const nav = document.createElement('div');
+    nav.className = 'section-nav';
+    nav.innerHTML = `<div class="section-nav-inner">
+        <span class="section-nav-label">Jump to</span>
+        <a href="#sec-objective">Objective</a>
+        <a href="#sec-target-statement">Target</a>
+        <a href="#sec-customer-profile">Customer</a>
+        <a href="#sec-undertakings">Undertakings</a>
+        <a href="#sec-original-selling-points">USPs</a>
+        <a href="#sec-main-method-step-by-step">Method</a>
+        <a href="#sec-enticement">Enticement</a>
+        <span class="section-nav-sep">•</span>
+        <a href="#sec-nine-year-target">9-yr</a>
+        <a href="#sec-three-year-target">3-yr</a>
+        <a href="#sec-one-year-target">1-yr</a>
+        <a href="#sec-quarterly-priority-projects">Quarterly</a>
+        <span class="section-nav-sep">•</span>
+        <a href="#" onclick="toggleAllSections(true); return false;" class="section-nav-action">Expand all</a>
+        <a href="#" onclick="toggleAllSections(false); return false;" class="section-nav-action">Collapse all</a>
+    </div>`;
+    host.appendChild(nav);
+
+    // ────────────────────────────────────────────────────────────────
+    // PLAN HEADER — one record, two plans stacked.
+    // ────────────────────────────────────────────────────────────────
+    host.appendChild(planDivider('📜 Objective Plan',
+        'Why the business exists. Reviewed annually, tweaked quarterly. All fields below share this single Airtable record with the Strategy Plan.'));
+
+    // Objective statement
+    host.appendChild(richSection({
+        icon: '🚀', title: 'Objective',
+        hint: 'The overarching objective of the business.',
+        children: [
+            textareaField('Objective', OBJSTRAT.objective, fields[OBJSTRAT.objective] || '', 'large'),
+        ],
+    }));
+
+    // Target Statement — What / Who / How
+    host.appendChild(richSection({
+        icon: '🎯', title: 'Target Statement',
+        hint: 'What we do, who we do it for, and how we do it.',
+        children: [
+            gridOf([
+                textareaField('What we do', OBJSTRAT.targetWhat, fields[OBJSTRAT.targetWhat] || ''),
+                textareaField('Who we do it for', OBJSTRAT.targetWho, fields[OBJSTRAT.targetWho] || ''),
+                textareaField('How we do it', OBJSTRAT.targetHow, fields[OBJSTRAT.targetHow] || ''),
+            ]),
+        ],
+    }));
+
+    // Customer Profile
+    host.appendChild(richSection({
+        icon: '👤', title: 'Customer Profile',
+        hint: 'Who is our target market?',
+        children: [
+            textareaField('Customer Profile', OBJSTRAT.customerProfile, fields[OBJSTRAT.customerProfile] || '', 'large'),
+        ],
+    }));
+
+    // Undertakings 1-20 (rules of play)
+    host.appendChild(richSection({
+        icon: '🤝', title: 'Undertakings',
+        hint: 'The rules that we all follow within the business. Leave blanks empty — 20 slots.',
+        children: [undertakingsGrid(fields)],
+    }));
+
+    // USPs 1-5
+    host.appendChild(richSection({
+        icon: '⭐', title: 'Original Selling Points',
+        hint: 'What differentiates us from competitors? Up to five.',
+        children: [
+            uspsGrid(fields),
+        ],
+    }));
+
+    // Main Method steps 1-10
+    host.appendChild(richSection({
+        icon: '🧩', title: 'Main Method (Step-by-Step)',
+        hint: 'The proven process or secret recipe — what the business does, in sequential steps. Up to 10.',
+        children: [
+            methodStepsGrid(fields),
+        ],
+    }));
+
+    // Enticement
+    host.appendChild(richSection({
+        icon: '✨', title: 'Enticement',
+        hint: 'What is our offer that the target market cannot refuse?',
+        children: [
+            textareaField('Enticement', OBJSTRAT.enticement, fields[OBJSTRAT.enticement] || '', 'large'),
+        ],
+    }));
+
+    // ────────────────────────────────────────────────────────────────
+    // STRATEGY PLAN — the quarterly half.
+    // ────────────────────────────────────────────────────────────────
+    host.appendChild(planDivider('🎯 Strategy Plan',
+        'How the business wins this quarter. Iterated every 90 days. Quarterly projects feed into the Projects table; monthly stones feed into the Tasks table.'));
+
+    // Nine-Year Target
+    host.appendChild(richSection({
+        icon: '🎯', title: 'Nine-Year Target',
+        hint: 'Paint the picture of what the business will look like in nine years, as specific as possible so it can be visualised.',
+        children: [
+            textareaField('Vision', OBJSTRAT.nineYearTarget, fields[OBJSTRAT.nineYearTarget] || '', 'large'),
+        ],
+    }));
+
+    // Three-Year Target
+    host.appendChild(richSection({
+        icon: '🏆', title: 'Three-Year Target',
+        hint: 'What will the business look like in three years? Include up to three measurables.',
+        children: [
+            textareaField('Target', OBJSTRAT.threeYearTarget, fields[OBJSTRAT.threeYearTarget] || '', 'large'),
+            gridOf(OBJSTRAT.threeYearMeas.map((fid, i) =>
+                textareaField(`Three-Year Measurable ${i + 1}`, fid, fields[fid] || ''))),
+        ],
+    }));
+
+    // One-Year Target
+    host.appendChild(richSection({
+        icon: '🥇', title: 'One-Year Target',
+        hint: 'What will the business look like in one year? Include up to three measurables.',
+        children: [
+            textareaField('Target', OBJSTRAT.oneYearTarget, fields[OBJSTRAT.oneYearTarget] || '', 'large'),
+            gridOf(OBJSTRAT.oneYearMeas.map((fid, i) =>
+                textareaField(`One-Year Measurable ${i + 1}`, fid, fields[fid] || ''))),
+        ],
+    }));
+
+    // Quarterly Projects + Monthly Stepping Stones (same collapsible pattern)
+    const qpSection = document.createElement('details');
+    qpSection.className = 'section';
+    qpSection.id = 'sec-quarterly-priority-projects';
+    // Open by default if any quarterly project text exists
+    const qpHasContent = OBJSTRAT.quarterlyProjects.some(fid => (fields[fid] || '').trim());
+    qpSection.open = qpHasContent;
+    qpSection.innerHTML = `<summary><span class="section-title-row"><span class="section-title">💼 Quarterly Priority Projects</span><span class="section-chevron">▾</span></span></summary>
+        <div class="section-body"><span class="section-sub">The three most important goals for the next 90 days. Each project breaks down into 3 monthly stepping stones.</span></div>`;
+
+    const qpGrid = document.createElement('div');
+    qpGrid.className = 'grid-cols-3';
+    for (let i = 0; i < 3; i++) {
+        const qpFid = OBJSTRAT.quarterlyProjects[i];
+        const stones = OBJSTRAT.monthlyStones[i];
+        const card = document.createElement('div');
+        card.className = 'qp-card';
+        card.innerHTML = `<h4>⭐ Quarterly Project ${i + 1}</h4>`;
+        card.appendChild(textareaField(`Project`, qpFid, fields[qpFid] || ''));
+
+        // KPI + Tracking + DoD — ports into Projects OS on sync.
+        const det = OBJSTRAT.qpDetails[i];
+        card.appendChild(kpiSubsection(`KPI for Project ${i + 1}`, {
+            kpiNameFid: det.kpiName,
+            kpiUnitFid: det.kpiUnit,
+            kpiTargetFid: det.kpiTarget,
+            ownerFid: det.owner,
+            trackingFid: det.tracking,
+            dodFid: det.dod,
+        }, fields));
+
+        const stonesWrap = document.createElement('div');
+        stonesWrap.className = 'qp-stones';
+        const stonesHead = document.createElement('div');
+        stonesHead.style.cssText = 'font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.04em;margin-top:4px;';
+        stonesHead.textContent = 'Monthly Stepping Stones';
+        stonesWrap.appendChild(stonesHead);
+
+        stones.forEach((stoneFid, m) => {
+            const row = document.createElement('div');
+            row.className = 'stone';
+            const label = document.createElement('span');
+            label.className = 'm-label';
+            label.textContent = `M${m + 1}`;
+            const ta = document.createElement('textarea');
+            ta.dataset.fieldId = stoneFid;
+            ta.value = fields[stoneFid] || '';
+            ta.placeholder = `Month ${m + 1} deliverable`;
+            ta.rows = 1;
+            ta.addEventListener('input', () => {
+                markDirty(); autosize(ta); equaliseQuarterlyProjects();
+            });
+            row.appendChild(label);
+            row.appendChild(ta);
+            stonesWrap.appendChild(row);
+        });
+        card.appendChild(stonesWrap);
+        qpGrid.appendChild(card);
+    }
+    qpSection.querySelector('.section-body').appendChild(qpGrid);
+    host.appendChild(qpSection);
+
+    // Auto-size every textarea to its content. Two passes — the first settles
+    // natural heights, the second captures any shifts (fonts loading, etc.).
+    setTimeout(autosizeAll, 0);
+    setTimeout(autosizeAll, 120);
+
+    // Attach "✨ Revise with AI" buttons to every field with a matching wizard step.
+    attachReviseAffordances();
+
+    // When a section is toggled open, its textareas couldn't be measured while
+    // it was closed. Re-run the full equalise pass so rows inside it match.
+    document.querySelectorAll('.plan-form details.section').forEach(d => {
+        d.addEventListener('toggle', () => {
+            if (d.open) {
+                setTimeout(() => {
+                    d.querySelectorAll('textarea').forEach(autosize);
+                    equaliseAllCardRows();
+                    equaliseAllGridRows();
+                }, 0);
+            }
+        });
+    });
+}
+
+// Adds the team-member options to every Owner dropdown already on the page,
+// preserving each one's current selection. Used when the team cache resolves
+// after the form has been rendered.
+function populateOwnerSelects() {
+    const opts = window.__stratOwnerOptions || [];
+    if (!opts.length) return;
+    document.querySelectorAll('.plan-form select[data-type="collaborator"]').forEach(sel => {
+        const keep = sel.value;
+        const byValue = new Map([...sel.options].map(o => [o.value, o]));
+        opts.forEach(m => {
+            const existing = byValue.get(m.email);
+            if (existing) {
+                // Rendered while the cache was cold, so the owner was added by
+                // the unknown-member fallback and is labelled with a raw email.
+                // Now that we know the name, show it.
+                if (existing.textContent === m.email) existing.textContent = m.name;
+                return;
+            }
+            const opt = document.createElement('option');
+            opt.value = m.email;
+            opt.textContent = m.name;
+            sel.appendChild(opt);
+        });
+        sel.value = keep;
+    });
+}
+
+// Called from the section nav "Expand all" / "Collapse all" links.
+function toggleAllSections(openAll) {
+    document.querySelectorAll('.plan-form details.section').forEach(d => { d.open = !!openAll; });
+    if (openAll) {
+        setTimeout(autosizeAll, 0);
+        setTimeout(autosizeAll, 120);
+    }
+}
+
+// Re-equalise on window resize (column count may change, breaking row groupings).
+window.addEventListener('resize', () => {
+    clearTimeout(window.__strategyResizeT);
+    window.__strategyResizeT = setTimeout(autosizeAll, 150);
+});
+
+// Helpers for form building
+
+function planDivider(title, sub) {
+    const d = document.createElement('div');
+    d.className = 'plan-divider';
+    d.innerHTML = `<h2>${escapeHtml(title)}</h2><p>${escapeHtml(sub)}</p>`;
+    return d;
+}
+
+function undertakingsGrid(fields) {
+    // Numbered cards in a responsive grid. Multi-line content — use textareas.
+    return cardGrid(OBJSTRAT.undertakings.map((fid, i) => numberedCard({
+        number: i + 1, fieldId: fid, value: fields[fid] || '',
+        placeholder: 'Undertaking text…',
+    })), { minColWidth: 260 });
+}
+
+function uspsGrid(fields) {
+    // 5 USPs — slightly wider cards look best.
+    return cardGrid(OBJSTRAT.usps.map((fid, i) => numberedCard({
+        number: i + 1, fieldId: fid, value: fields[fid] || '',
+        placeholder: 'USP text…',
+    })), { minColWidth: 300 });
+}
+
+function methodStepsGrid(fields) {
+    // 10 method steps. Each card carries the free-text step AND a picker for
+    // the Main Methods record linked in that slot (OBJSTRAT.mainMethodLinks).
+    // The Systemisation page reads the LINKS, not the text — a step with text
+    // but no link is invisible there, so the row warns when they diverge.
+    const wrap = document.createElement('div');
+    const grid = cardGrid(OBJSTRAT.methodSteps.map((fid, i) => methodStepCard(i, fields)), { minColWidth: 280 });
+    wrap.appendChild(grid);
+
+    const foot = document.createElement('div');
+    foot.className = 'mm-bulk-row';
+    foot.innerHTML = `
+        <span class="mm-bulk-hint" id="mmBulkHint"></span>
+        <button type="button" class="btn btn-ghost" id="mmBulkCreateBtn" onclick="createMissingMainMethods()">Create the missing Main Method records from my step text</button>`;
+    wrap.appendChild(foot);
+    // The grid is built detached from the document, so getElementById-based
+    // row rendering must wait until renderForm has attached it.
+    setTimeout(() => {
+        OBJSTRAT.methodSteps.forEach((fid, i) => renderMethodLinkRow(i));
+        updateMethodBulkRow();
+    }, 0);
+    return wrap;
+}
+
+// ─── Main Method link slots ──────────────────────────────────────────
+// Two representations live on the record: free text per step
+// (OBJSTRAT.methodSteps) and a linked Main Methods record per slot
+// (OBJSTRAT.mainMethodLinks). Slot 1 is the first letter of the acronym the
+// Systemisation page prints, slot 2 the second, and so on — so the swap
+// buttons move text AND link together, and nothing else changes slot order.
+
+function initMethodLinkSelections(fields) {
+    methodLinkSel = OBJSTRAT.mainMethodLinks.map(fid => {
+        const v = fields[fid];
+        if (Array.isArray(v) && v[0]) return typeof v[0] === 'object' ? v[0].id : v[0];
+        return null;
+    });
+}
+
+let mainMethodsPromise = null; // in-flight guard — renderForm can re-enter before the first fetch resolves
+
+async function ensureMainMethodsLoaded() {
+    if (allMainMethods) return allMainMethods;
+    if (mainMethodsPromise) return mainMethodsPromise;
+    mainMethodsPromise = fetchAllMainMethods();
+    try { return await mainMethodsPromise; } finally { mainMethodsPromise = null; }
+}
+
+async function fetchAllMainMethods() {
+    const out = [];
+    let offset = '';
+    do {
+        const params = new URLSearchParams({ returnFieldsByFieldId: 'true', pageSize: '100' });
+        if (offset) params.set('offset', offset);
+        const data = await airtableFetch(`${TABLES.mainMethods}?${params.toString()}`);
+        (data.records || []).forEach(r => out.push({
+            id: r.id,
+            name: r.fields?.[MAIN_METHOD.name] || '(unnamed)',
+            description: r.fields?.[MAIN_METHOD.description] || '',
+        }));
+        offset = data.offset || '';
+    } while (offset);
+    out.sort((a, b) => a.name.localeCompare(b.name));
+    allMainMethods = out;
+    return out;
+}
+
+function methodStepCard(i, fields) {
+    const card = numberedCard({
+        number: i + 1, fieldId: OBJSTRAT.methodSteps[i], value: fields[OBJSTRAT.methodSteps[i]] || '',
+        placeholder: 'Step text…',
+    });
+    card.classList.add('mm-step-card');
+    card.dataset.mmSlot = String(i);
+    const row = document.createElement('div');
+    row.className = 'mm-link-row';
+    row.id = `mmLinkRow-${i}`;
+    card.appendChild(row);
+    // Keep the warning + bulk button live while the founder types.
+    card.querySelector('textarea').addEventListener('input', () => {
+        renderMethodLinkRow(i);
+        updateMethodBulkRow();
+    });
+    return card;
+}
+
+function methodStepText(i) {
+    const ta = document.querySelector(`textarea[data-field-id="${OBJSTRAT.methodSteps[i]}"]`);
+    return (ta ? ta.value : '').trim();
+}
+
+function renderMethodLinkRow(i) {
+    const row = document.getElementById(`mmLinkRow-${i}`);
+    if (!row) return;
+    const selId = methodLinkSel[i];
+    const text = methodStepText(i);
+    const loaded = Array.isArray(allMainMethods);
+    const options = loaded
+        ? allMainMethods.map(m =>
+            `<option value="${m.id}"${m.id === selId ? ' selected' : ''}>${escapeHtml(m.name)}</option>`).join('')
+        : (selId ? `<option value="${selId}" selected>Loading…</option>` : '');
+    const warn = text && !selId
+        ? `<span class="mm-warn" title="The Systemisation page builds its method strip from the LINKED records, not this text. Pick a record or create one from the text.">⚠ Text but no linked record</span>`
+        : '';
+    const createBtn = text && !selId
+        ? `<button type="button" class="mm-mini-btn" onclick="createMainMethodFromStep(${i})" title="Create a Main Method record named from this step's text and link it here">+ Create from text</button>`
+        : '';
+    row.innerHTML = `
+        <div class="mm-link-line">
+            <label class="mm-link-label" for="mmPick-${i}">Linked record</label>
+            <select id="mmPick-${i}" class="mm-pick" ${loaded ? '' : 'disabled'} aria-label="Main Method record for step ${i + 1}">
+                <option value="">— none —</option>${options}
+            </select>
+            <span class="mm-move" role="group" aria-label="Move step ${i + 1}">
+                <button type="button" class="mm-mini-btn" onclick="swapMethodSteps(${i},${i - 1})" ${i === 0 ? 'disabled' : ''} title="Move this step up — text and linked record move together" aria-label="Move step ${i + 1} up">↑</button>
+                <button type="button" class="mm-mini-btn" onclick="swapMethodSteps(${i},${i + 1})" ${i === OBJSTRAT.methodSteps.length - 1 ? 'disabled' : ''} title="Move this step down — text and linked record move together" aria-label="Move step ${i + 1} down">↓</button>
+            </span>
+        </div>
+        ${warn || createBtn ? `<div class="mm-link-line mm-link-warnline">${warn}${createBtn}</div>` : ''}`;
+    const pick = row.querySelector(`#mmPick-${i}`);
+    pick.addEventListener('change', () => {
+        methodLinkSel[i] = pick.value || null;
+        markDirty();
+        renderMethodLinkRow(i);
+        updateMethodBulkRow();
+    });
+}
+
+function updateMethodBulkRow() {
+    const hint = document.getElementById('mmBulkHint');
+    const btn = document.getElementById('mmBulkCreateBtn');
+    if (!hint || !btn) return;
+    const missing = OBJSTRAT.methodSteps
+        .map((fid, i) => i)
+        .filter(i => methodStepText(i) && !methodLinkSel[i]);
+    btn.disabled = missing.length === 0;
+    hint.textContent = missing.length
+        ? `${missing.length} step${missing.length === 1 ? ' has' : 's have'} text but no linked Main Method record — the Systemisation page can't see ${missing.length === 1 ? 'it' : 'them'}.`
+        : 'Every step with text is linked to a Main Method record. ✓';
+    hint.classList.toggle('mm-hint-warn', missing.length > 0);
+}
+
+// Name = the step text up to the first dash or full stop; Description = the rest.
+function splitStepText(text) {
+    const t = String(text || '').trim();
+    const idx = t.search(/[-–—.]/);
+    if (idx === -1) return { name: t, description: '' };
+    return { name: t.slice(0, idx).trim(), description: t.slice(idx + 1).trim() };
+}
+
+// Create one Main Method record from a step's text and link it into the slot.
+// If the plan record exists the link is written to Airtable immediately, so
+// the Systemisation page sees it without a separate Save.
+// Returns true on success — createMissingMainMethods counts on it.
+let mmCreateBusy = false; // double-click guard — a second click would create a duplicate record
+
+async function createMainMethodFromStep(i) {
+    if (mmCreateBusy) return false;
+    const text = methodStepText(i);
+    if (!text) { setStatus('warn', `Step ${i + 1} has no text to create a record from.`); return false; }
+    const { name, description } = splitStepText(text);
+    if (!name) { setStatus('warn', `Step ${i + 1}'s text starts with punctuation — type the step name first.`); return false; }
+    mmCreateBusy = true;
+    setStatus('info', `Creating Main Method "${name}"…`);
+    try {
+        const body = { fields: { [MAIN_METHOD.name]: name }, typecast: true };
+        if (description) body.fields[MAIN_METHOD.description] = description;
+        const created = await airtableFetch(TABLES.mainMethods, { method: 'POST', body: JSON.stringify(body) });
+        if (allMainMethods) {
+            allMainMethods.push({ id: created.id, name, description });
+            allMainMethods.sort((a, b) => a.name.localeCompare(b.name));
+        }
+        methodLinkSel[i] = created.id;
+        if (currentRecord && currentRecord.id) {
+            await airtableFetch(`${TABLES.objStrat}/${currentRecord.id}?returnFieldsByFieldId=true`, {
+                method: 'PATCH',
+                body: JSON.stringify({ fields: { [OBJSTRAT.mainMethodLinks[i]]: [created.id] }, typecast: true }),
+            });
+            if (currentRecord.fields) currentRecord.fields[OBJSTRAT.mainMethodLinks[i]] = [created.id];
+            setStatus('success', `Created and linked "${name}" to step ${i + 1}.`);
+        } else {
+            markDirty();
+            setStatus('success', `Created "${name}" — click Save changes to link it.`);
+        }
+        setTimeout(() => setStatus('', ''), 3000);
+        renderMethodLinkRow(i);
+        updateMethodBulkRow();
+        return true;
+    } catch (e) {
+        setStatus('error', `Couldn't create the Main Method record: ${e.message || e}`);
+        return false;
+    } finally {
+        mmCreateBusy = false;
+    }
+}
+
+// One click for a new client's day one: create a Main Method record for every
+// step that has text but no linked record, then link them all in slot order.
+async function createMissingMainMethods() {
+    const missing = OBJSTRAT.methodSteps
+        .map((fid, i) => i)
+        .filter(i => methodStepText(i) && !methodLinkSel[i]);
+    if (!missing.length) return;
+    const names = missing.map(i => splitStepText(methodStepText(i)).name).filter(Boolean);
+    if (!confirm(`Create ${names.length} Main Method record${names.length === 1 ? '' : 's'}?\n\n${names.map(n => '• ' + n).join('\n')}\n\nEach step's linked record slot will be filled in the same order as the steps.`)) return;
+    const btn = document.getElementById('mmBulkCreateBtn');
+    if (btn) btn.disabled = true;
+    let done = 0;
+    const failedSteps = [];
+    for (const i of missing) {
+        const okCreated = await createMainMethodFromStep(i);
+        if (okCreated) done++; else failedSteps.push(i + 1);
+        // Airtable rate limit — 5 req/s; pause between create+link pairs.
+        await new Promise(r => setTimeout(r, 300));
+    }
+    if (failedSteps.length) {
+        setStatus('error', `Created and linked ${done} of ${missing.length} — step${failedSteps.length === 1 ? '' : 's'} ${failedSteps.join(', ')} failed. Fix the step text and try again.`);
+    } else {
+        setStatus('success', `Created and linked ${done} Main Method record${done === 1 ? '' : 's'}.`);
+        setTimeout(() => setStatus('', ''), 4000);
+    }
+    updateMethodBulkRow();
+}
+
+// Swap two adjacent steps — text and linked record move together, so the
+// acronym letter travels with its step instead of being renamed.
+function swapMethodSteps(i, j) {
+    if (j < 0 || j >= OBJSTRAT.methodSteps.length) return;
+    const taI = document.querySelector(`textarea[data-field-id="${OBJSTRAT.methodSteps[i]}"]`);
+    const taJ = document.querySelector(`textarea[data-field-id="${OBJSTRAT.methodSteps[j]}"]`);
+    if (!taI || !taJ) return;
+    const t = taI.value; taI.value = taJ.value; taJ.value = t;
+    const s = methodLinkSel[i]; methodLinkSel[i] = methodLinkSel[j]; methodLinkSel[j] = s;
+    [taI, taJ].forEach(ta => {
+        autosize(ta);
+        const card = ta.closest('.num-card');
+        if (card) card.classList.toggle('is-empty', !ta.value.trim());
+    });
+    markDirty();
+    renderMethodLinkRow(i);
+    renderMethodLinkRow(j);
+    updateMethodBulkRow();
+}
+
+// Build a responsive card grid. CSS Grid auto-fills columns; all items in the
+// same visual row end up the same height via CSS align-items: stretch + the
+// equaliseRowHeights() pass in autosizeAll.
+function cardGrid(cards, opts = {}) {
+    const g = document.createElement('div');
+    g.className = 'card-grid';
+    g.style.gridTemplateColumns = `repeat(auto-fill, minmax(${opts.minColWidth || 280}px, 1fr))`;
+    cards.forEach(c => g.appendChild(c));
+    return g;
+}
+
+function numberedCard({ number, fieldId, value, placeholder }) {
+    const card = document.createElement('div');
+    card.className = 'num-card';
+    if (!value) card.classList.add('is-empty');
+    card.innerHTML = `<div class="num-badge">${String(number).padStart(2, '0')}</div>`;
+    const ta = document.createElement('textarea');
+    ta.dataset.fieldId = fieldId;
+    ta.value = value || '';
+    ta.placeholder = placeholder || '';
+    ta.rows = 1;
+    ta.addEventListener('input', () => {
+        markDirty(); autosize(ta);
+        card.classList.toggle('is-empty', !ta.value.trim());
+        equaliseCardRow(card);
+    });
+    card.appendChild(ta);
+    // Click anywhere on the card (badge / padding / empty area) focuses the
+    // textarea and drops the cursor at the end.
+    card.addEventListener('click', e => {
+        if (e.target === ta || e.target.classList?.contains('revise-btn')) return;
+        ta.focus();
+        const len = ta.value.length;
+        try { ta.setSelectionRange(len, len); } catch (err) {}
+    });
+    return card;
+}
+
+// Compact KPI + Tracking + DoD block for inside a Quarterly Project card.
+// Matches the Projects OS schema so values sync 1-to-1 on project creation.
+function kpiSubsection(title, fieldMap, fields) {
+    const box = document.createElement('div');
+    box.className = 'kpi-subsection';
+    const h = document.createElement('div');
+    h.className = 'kpi-subsection-title';
+    h.textContent = title;
+    box.appendChild(h);
+
+    // KPI Name + Unit side-by-side
+    const nameUnitRow = document.createElement('div');
+    nameUnitRow.style.cssText = 'display:grid;grid-template-columns:1fr 80px;gap:8px';
+    nameUnitRow.appendChild(singleLineField('KPI Name', fieldMap.kpiNameFid, fields[fieldMap.kpiNameFid] || ''));
+    // Unit select
+    const unitRow = document.createElement('div');
+    unitRow.className = 'field-row';
+    const unitLabel = document.createElement('label');
+    unitLabel.textContent = 'Unit';
+    const unitSel = document.createElement('select');
+    unitSel.dataset.fieldId = fieldMap.kpiUnitFid;
+    ['', '£', '%', 'count', 'days', 'items', 'hours'].forEach(u => {
+        const opt = document.createElement('option');
+        opt.value = u; opt.textContent = u || '—';
+        if (extractSelectName(fields[fieldMap.kpiUnitFid]) === u) opt.selected = true;
+        unitSel.appendChild(opt);
+    });
+    unitSel.style.cssText = 'padding:9px 10px;border:1px solid var(--border-default);border-radius:6px;font-size:13px;background:var(--bg-surface);font-family:inherit;color:var(--text-primary)';
+    unitSel.addEventListener('change', () => markDirty());
+    unitRow.appendChild(unitLabel);
+    unitRow.appendChild(unitSel);
+    nameUnitRow.appendChild(unitRow);
+    box.appendChild(nameUnitRow);
+
+    // KPI Target (number) + Project Owner (collaborator) on one row so
+    // they stay visible without pushing the bigger textareas further down.
+    if (fieldMap.kpiTargetFid || fieldMap.ownerFid) {
+        const targetOwnerRow = document.createElement('div');
+        targetOwnerRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:6px';
+        if (fieldMap.kpiTargetFid) {
+            const tRow = document.createElement('div');
+            tRow.className = 'field-row';
+            const tLab = document.createElement('label'); tLab.textContent = 'KPI Target';
+            const tInp = document.createElement('input');
+            tInp.type = 'number'; tInp.step = 'any';
+            tInp.dataset.fieldId = fieldMap.kpiTargetFid;
+            const raw = fields[fieldMap.kpiTargetFid];
+            tInp.value = (raw === 0 || raw) ? raw : '';
+            tInp.placeholder = 'e.g. 4000';
+            tInp.style.cssText = 'padding:9px 10px;border:1px solid var(--border-default);border-radius:6px;font-size:13px;background:var(--bg-surface);font-family:inherit;color:var(--text-primary);width:100%';
+            tInp.addEventListener('input', () => markDirty());
+            tRow.appendChild(tLab); tRow.appendChild(tInp);
+            targetOwnerRow.appendChild(tRow);
+        }
+        if (fieldMap.ownerFid) {
+            const oRow = document.createElement('div');
+            oRow.className = 'field-row';
+            const oLab = document.createElement('label'); oLab.textContent = 'Owner';
+            // singleCollaborator stores as { id, email, name } — display email,
+            // let the user type/paste an email from a team member.
+            const current = fields[fieldMap.ownerFid] || {};
+            const currentEmail = typeof current === 'object' ? (current.email || '') : (current || '');
+            const oSel = document.createElement('select');
+            oSel.dataset.fieldId = fieldMap.ownerFid;
+            oSel.dataset.type = 'collaborator';
+            oSel.style.cssText = 'padding:9px 10px;border:1px solid var(--border-default);border-radius:6px;font-size:13px;background:var(--bg-surface);font-family:inherit;color:var(--text-primary);width:100%';
+            const emptyOpt = document.createElement('option'); emptyOpt.value = ''; emptyOpt.textContent = '—';
+            oSel.appendChild(emptyOpt);
+            // Team options from in-memory cache (filled lazily on first form render).
+            (window.__stratOwnerOptions || []).forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.email; opt.textContent = m.name;
+                if (m.email === currentEmail) opt.selected = true;
+                oSel.appendChild(opt);
+            });
+            // If the current value isn't in the list (e.g. inactive member),
+            // add it so we don't silently drop the selection.
+            if (currentEmail && !Array.from(oSel.options).some(o => o.value === currentEmail)) {
+                const opt = document.createElement('option');
+                opt.value = currentEmail; opt.textContent = currentEmail;
+                opt.selected = true;
+                oSel.appendChild(opt);
+            }
+            oSel.addEventListener('change', () => markDirty());
+            oRow.appendChild(oLab); oRow.appendChild(oSel);
+            targetOwnerRow.appendChild(oRow);
+        }
+        box.appendChild(targetOwnerRow);
+    }
+
+    box.appendChild(textareaField('Tracking Method', fieldMap.trackingFid, fields[fieldMap.trackingFid] || ''));
+    box.appendChild(textareaField('Definition of Done', fieldMap.dodFid, fields[fieldMap.dodFid] || ''));
+    return box;
+}
+
+// Airtable singleSelect values come back as either a plain string (when
+// queried with returnFieldsByFieldId on newer schemas) or an object like
+// { id, name, color }. Normalise to a string.
+function extractSelectName(v) {
+    if (!v) return '';
+    if (typeof v === 'string') return v;
+    if (typeof v === 'object' && v.name) return v.name;
+    return '';
+}
+
+function singleLineField(label, fieldId, value) {
+    const row = document.createElement('div');
+    row.className = 'field-row';
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.dataset.fieldId = fieldId;
+    input.value = value || '';
+    input.addEventListener('input', () => markDirty());
+    row.appendChild(lab);
+    row.appendChild(input);
+    return row;
+}
+
+function richSection({ icon, title, hint, children }) {
+    // Each section is a <details> so it can be folded.
+    // Default: open if any field inside has content, otherwise closed.
+    const d = document.createElement('details');
+    d.className = 'section';
+    d.open = childrenHaveContent(children);
+
+    const summary = document.createElement('summary');
+    summary.innerHTML = `<span class="section-title-row"><span class="section-title">${icon ? escapeHtml(icon) + ' ' : ''}${escapeHtml(title)}</span><span class="section-chevron">▾</span></span>`;
+    d.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'section-body';
+    if (hint) {
+        const sub = document.createElement('span');
+        sub.className = 'section-sub';
+        sub.textContent = hint;
+        body.appendChild(sub);
+    }
+    children.forEach(c => body.appendChild(c));
+    d.appendChild(body);
+
+    // Give each section an id for nav anchoring
+    d.id = 'sec-' + slugify(title);
+    return d;
+}
+
+function childrenHaveContent(children) {
+    for (const c of children) {
+        if (!c) continue;
+        const fields = c.querySelectorAll ? c.querySelectorAll('[data-field-id]') : [];
+        for (const f of fields) if (f.value && String(f.value).trim()) return true;
+    }
+    return false;
+}
+
+function slugify(s) {
+    return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+}
+
+function textareaField(label, fieldId, value, sizeClass) {
+    const row = document.createElement('div');
+    row.className = 'field-row';
+    const lab = document.createElement('label');
+    lab.textContent = label;
+    const ta = document.createElement('textarea');
+    ta.dataset.fieldId = fieldId;
+    ta.value = value || '';
+    if (sizeClass) ta.className = sizeClass;
+    ta.rows = 1;
+    ta.addEventListener('input', () => {
+        markDirty(); autosize(ta);
+        // If this textarea is inside a multi-column grid, re-equalise the row
+        // so its column-mates grow to match.
+        if (row.parentElement?.classList.contains('grid-cols-2') ||
+            row.parentElement?.classList.contains('grid-cols-3')) {
+            equaliseFieldRow(ta);
+        }
+        // If it's inside a Quarterly Project card, match the 3 Project
+        // textareas and keep the stepping stones aligned below.
+        if (row.closest('.qp-card')) equaliseQuarterlyProjects();
+    });
+    row.appendChild(lab);
+    row.appendChild(ta);
+    return row;
+    // Initial sizing handled by autosizeAll() at the end of renderForm.
+}
+
+// Grow a textarea to fit its content. No cap — if content is long, the textarea
+// is long. Clipping content is never acceptable.
+function autosize(ta) {
+    if (!ta) return;
+    // Clear any min-height set by row-equalize so we measure natural height.
+    ta.style.minHeight = '';
+    ta.style.height = 'auto';
+    ta.style.height = (ta.scrollHeight + 2) + 'px';
+}
+
+// Re-size every textarea on the page, then equalise heights within each
+// visual row so grids look symmetric.
+function autosizeAll() {
+    document.querySelectorAll('.plan-form textarea').forEach(autosize);
+    // Measurement is only correct once layout settles — run equalize in a
+    // second pass to catch any shifts from the first one.
+    equaliseAllCardRows();
+    equaliseAllGridRows();
+    equaliseQuarterlyProjects();
+}
+
+// Lines up the 3 Quarterly Project columns. Every QP card has the same
+// textarea structure in the same DOM order (Project, KPI Tracking, KPI DoD,
+// stone M1, stone M2, stone M3), so we match each textarea at position N
+// across all three cards and set min-height to the tallest. That way every
+// horizontal row of fields across the three columns sits at the same height.
+function equaliseQuarterlyProjects() {
+    const cards = document.querySelectorAll('.qp-card');
+    if (cards.length !== 3) return;
+    const tasByCard = Array.from(cards).map(c => Array.from(c.querySelectorAll('textarea')));
+    // Reset + re-measure every textarea before we equalise, otherwise a prior
+    // min-height masks the true natural height of the tallest in the row.
+    tasByCard.flat().forEach(t => { t.style.minHeight = ''; autosize(t); });
+    const maxLen = Math.max(...tasByCard.map(arr => arr.length));
+    for (let pos = 0; pos < maxLen; pos++) {
+        const tas = tasByCard.map(arr => arr[pos]).filter(Boolean);
+        if (tas.length < 2) continue;
+        const max = Math.max(...tas.map(t => t.offsetHeight));
+        tas.forEach(t => { t.style.minHeight = max + 'px'; });
+    }
+}
+
+function equaliseTextareas(tas) {
+    if (tas.length < 2) return;
+    tas.forEach(t => { t.style.minHeight = ''; autosize(t); });
+    const max = Math.max(...tas.map(t => t.offsetHeight));
+    tas.forEach(t => { t.style.minHeight = max + 'px'; });
+}
+
+// Group cards within one .card-grid by their offsetTop (visual row) and set
+// every textarea's min-height in that row to the tallest natural height.
+// Using min-height (not height) means symmetry never clips long content —
+// a cell taller than its neighbours wins, shorter ones match up to it.
+function equaliseAllCardRows() {
+    document.querySelectorAll('.card-grid').forEach(grid => {
+        const cards = Array.from(grid.querySelectorAll('.num-card'));
+        if (!cards.length) return;
+        // Reset min-heights so measurements are natural.
+        cards.forEach(c => { const t = c.querySelector('textarea'); if (t) t.style.minHeight = ''; });
+        // Re-autosize in case something was pending.
+        cards.forEach(c => { const t = c.querySelector('textarea'); if (t) autosize(t); });
+        const rows = groupByTop(cards);
+        rows.forEach(row => {
+            const tas = row.map(c => c.querySelector('textarea')).filter(Boolean);
+            if (tas.length < 2) return;
+            const max = Math.max(...tas.map(t => t.offsetHeight));
+            tas.forEach(t => { t.style.minHeight = max + 'px'; });
+        });
+    });
+}
+
+// Same pattern for the 3-col grids (Target Statement, Measurables).
+function equaliseAllGridRows() {
+    document.querySelectorAll('.grid-cols-2, .grid-cols-3').forEach(grid => {
+        const rows = Array.from(grid.querySelectorAll('.field-row'));
+        if (rows.length < 2) return;
+        // Reset, re-measure, then equalise.
+        rows.forEach(r => { const t = r.querySelector('textarea'); if (t) { t.style.minHeight = ''; autosize(t); } });
+        const groups = groupByTop(rows);
+        groups.forEach(group => {
+            const tas = group.map(r => r.querySelector('textarea')).filter(Boolean);
+            if (tas.length < 2) return;
+            const max = Math.max(...tas.map(t => t.offsetHeight));
+            tas.forEach(t => { t.style.minHeight = max + 'px'; });
+        });
+    });
+}
+
+// Equalise one row — called from the input handler so typing grows row-mates.
+function equaliseCardRow(card) {
+    const grid = card.closest('.card-grid');
+    if (!grid) return;
+    const top = card.offsetTop;
+    const row = Array.from(grid.querySelectorAll('.num-card')).filter(c => c.offsetTop === top);
+    const tas = row.map(c => c.querySelector('textarea')).filter(Boolean);
+    if (tas.length < 2) return;
+    tas.forEach(t => { t.style.minHeight = ''; autosize(t); });
+    const max = Math.max(...tas.map(t => t.offsetHeight));
+    tas.forEach(t => { t.style.minHeight = max + 'px'; });
+}
+
+// Called when any textarea outside a card grid grows/shrinks (e.g. Target
+// Statement, Measurables). Re-runs row-equalize across all 2/3-col grids.
+function equaliseFieldRow(ta) {
+    // Cheap enough to just re-do all grid rows — there are only a handful.
+    equaliseAllGridRows();
+}
+
+function groupByTop(els) {
+    const byTop = new Map();
+    els.forEach(el => {
+        const key = el.offsetTop;
+        if (!byTop.has(key)) byTop.set(key, []);
+        byTop.get(key).push(el);
+    });
+    return Array.from(byTop.values());
+}
+
+function gridOf(children) {
+    const g = document.createElement('div');
+    g.className = 'grid-cols-3';
+    children.forEach(c => g.appendChild(c));
+    return g;
+}
+
+function markDirty() {
+    isDirty = true;
+    updateSaveButton();
+}
+
+function updateSaveButton() {
+    document.getElementById('saveBtn').disabled = !isDirty;
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// SAVE — collects field values and upserts to Airtable.
+// ═════════════════════════════════════════════════════════════════════
+
+async function saveRecord() {
+    const { businessId, quarter, year } = getSelection();
+    if (!businessId || !quarter || !year) {
+        setStatus('warn', 'Pick a business, quarter and year before saving.');
+        return;
+    }
+    const btn = document.getElementById('saveBtn');
+    btn.disabled = true;
+    setStatus('info', 'Saving…');
+
+    // Collect values from all inputs/textareas with data-field-id.
+    // Uses readAllFormFields so number fields coerce to numbers and
+    // singleCollaborator fields serialise as { email: ... } — plain
+    // strings are rejected by Airtable even with typecast:true.
+    const fields = readAllFormFields();
+    // Trim string values (readAllFormFields keeps raw — the form assumed
+    // trimmed strings historically so preserve that for textareas etc).
+    Object.keys(fields).forEach(fid => {
+        if (typeof fields[fid] === 'string') fields[fid] = fields[fid].trim();
+    });
+
+    // Main Method link slots — the pickers aren't [data-field-id] inputs, so
+    // readAllFormFields can't see them. Write every slot so swaps and clears
+    // persist. Selections were seeded from the record at render, so untouched
+    // slots write back exactly what was already there.
+    if (methodLinkSel.length === OBJSTRAT.mainMethodLinks.length) {
+        OBJSTRAT.mainMethodLinks.forEach((fid, i) => {
+            fields[fid] = methodLinkSel[i] ? [methodLinkSel[i]] : [];
+        });
+    }
+
+    // Never CREATE an empty plan. saveRecord force-adds Quarter, Year and
+    // Business below, so a form with nothing in it still writes a record —
+    // and that record then counts as "a plan exists", so loadRecord stops
+    // offering the empty state and the founder loses both routes in.
+    // Reachable by walking the wizard end to end without answering: every
+    // step skipped leaves ~50 blank fields, and finishing unlocks Save.
+    //
+    // Runs AFTER the Main Method block on purpose, so a plan whose only
+    // content is a linked method step still counts as content. That block
+    // writes [] into every unselected slot, and an empty array is neither
+    // null nor '' — checking Array.isArray first is what stops those empty
+    // slots reading as content and waving a blank plan through.
+    //
+    // Only guard the create. Clearing every field of an existing plan and
+    // saving is a deliberate edit, and blocking it would be wrong.
+    // readAllFormFields yields '' for blank text and null for blank number
+    // and collaborator fields, so anything else is real content.
+    const hasContent = Object.values(fields).some(v =>
+        Array.isArray(v) ? v.length > 0 : (v !== null && v !== ''));
+    if (!currentRecord && !hasContent) {
+        setStatus('error', 'Nothing to save yet — answer at least one question, or fill in a field, first.');
+        updateSaveButton();
+        return;
+    }
+
+    // Quarter/year/business are always required
+    fields[OBJSTRAT.quarter] = quarter;
+    fields[OBJSTRAT.year] = year;
+    fields[OBJSTRAT.business] = [businessId];
+
+    try {
+        // returnFieldsByFieldId=true so the response has fields keyed by field
+        // ID (same shape as loadRecord). Without this, later code that reads
+        // currentRecord.fields[fieldId] fails silently (e.g. pushProjectsManually
+        // couldn't find QP text and reported "no quarterly projects").
+        if (currentRecord) {
+            // Update
+            const res = await airtableFetch(`${TABLES.objStrat}/${currentRecord.id}?returnFieldsByFieldId=true`, {
+                method: 'PATCH',
+                body: JSON.stringify({ fields, typecast: true }),
+            });
+            currentRecord = res;
+        } else {
+            // Create
+            const res = await airtableFetch(`${TABLES.objStrat}?returnFieldsByFieldId=true`, {
+                method: 'POST',
+                body: JSON.stringify({ fields, typecast: true }),
+            });
+            currentRecord = res;
+        }
+        isDirty = false;
+        setStatus('success', `Saved ${quarter} ${year}.`);
+        setTimeout(() => setStatus('', ''), 2500);
+        // Propagate QP name edits to any linked Project records. If the
+        // founder renamed a Quarterly Project here, its downstream Project
+        // record (in Projects OS) should rename too. We rely on
+        // `linkedProject` (multipleRecordLinks → Projects) on the O&S record
+        // to find the right target.
+        try { await propagateQpNamesToLinkedProjects(fields); } catch (e) { console.warn('[saveRecord] propagate failed', e); }
+        // After a successful save, offer to push Quarterly Projects to
+        // Projects OS as real project records. Shown as an inline banner —
+        // user can ignore and save again later without re-prompting within
+        // the same session.
+        offerProjectPush();
+    } catch (e) {
+        setStatus('error', `Save failed: ${e.message}`);
+    } finally {
+        updateSaveButton();
+    }
+}
+
+// After the O&S record saves, for each QP that has a linkedProject,
+// re-derive the project name from the QP's current text and PATCH the
+// Project record's Name if it has changed. Makes rename-in-Strategy-OS
+// flow through to Projects OS automatically.
+async function propagateQpNamesToLinkedProjects(savedFields) {
+    if (!currentRecord || !currentRecord.id) {
+        return;
+    }
+    // Airtable's PATCH response may not include fields that weren't in the
+    // request body, which is why the linkedProject fields look empty here
+    // after saveRecord. Do a fresh GET with returnFieldsByFieldId so we
+    // always have the complete record before propagating.
+    let recordFields = currentRecord.fields || {};
+    try {
+        const fresh = await airtableFetch(`${TABLES.objStrat}/${currentRecord.id}?returnFieldsByFieldId=true`);
+        recordFields = fresh.fields || recordFields;
+        currentRecord.fields = recordFields;
+    } catch (e) {
+        console.warn('[propagate] fresh fetch failed, falling back to cached record', e);
+    }
+    for (let i = 0; i < OBJSTRAT.qpDetails.length; i++) {
+        const det = OBJSTRAT.qpDetails[i];
+        const linkArr = recordFields[det.linkedProject];
+        const linkedId = Array.isArray(linkArr) && linkArr[0]
+            ? (typeof linkArr[0] === 'object' ? linkArr[0].id : linkArr[0])
+            : null;
+        if (!linkedId) {
+            continue;
+        }
+        const qpText = (savedFields[OBJSTRAT.quarterlyProjects[i]] || '').trim();
+        if (!qpText) {
+            continue;
+        }
+        const newName = deriveProjectName(qpText);
+        if (!newName) {
+            continue;
+        }
+        try {
+            await airtableFetch(`${TABLES.projects}/${linkedId}`, {
+                method: 'PATCH',
+                body: JSON.stringify({ fields: { [PROJ_F.name]: newName }, typecast: true }),
+            });
+        } catch (e) {
+            console.warn(`[propagate] QP${i + 1}: PATCH failed`, e);
+        }
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// PROJECTS OS SYNC — push each non-empty Quarterly Project as a record
+// in the Projects table, with all the fields we captured in the Strategy
+// OS (KPI Name/Unit/Tracking, Definition of Done, Business, Quarter bounds).
+// ═════════════════════════════════════════════════════════════════════
+
+// Projects table field IDs (matches os/tasks/index.html PF constants).
+const PROJ_F = {
+    name:        'fldiMZICg1KOORpte',
+    business:    'fldtdJTFkMtldxEVf',
+    startDate:   'fldGIlsn0cSEpnj18',
+    endDate:     'fldU0cJparnkvOUsV',
+    status:      'fldZ0SpReVaDS1VXb',
+    dod:         'fldgjzVEnfnZowrBD',
+    kpiName:     'fldABYFMf2yBKWdlD',
+    kpiUnit:     'fldrYZEghROXYf6w0',
+    kpiTarget:   'fldaI0voHia91SYZz',
+    kpiTracking: 'fld2wYB5ZEn9WRcjN',
+    owner:       'fldXUAPrpStGwc2V9',
+};
+
+// Projects table extra field IDs for reading collaborators during push.
+// (PROJ_F above is the write-side map; this is the read-side extension.)
+const PROJ_F_READ = { projCollabs: 'fldN5l2H4WCsM0S3x' };
+
+// Team Members table — used to resolve Project Collaborator record IDs to
+// the Airtable user emails that Task.Collaborators (multipleCollaborators)
+// needs. Loaded lazily on first push.
+const TEAM_MEMBERS_TABLE = 'tblco0p2OnlLQVAX7';
+const TM_F = {
+    name:          'flds7xoRFQhcRTnbB',
+    member:        'fldh16yvEgBy8uLKQ',
+    active:        'fld2YLfcPqSe6b60u',
+    preferredName: 'fldFyTZu3vu1a7X3a',
+    fullLegalName: 'fld1DYEbtyVsO2GVP',
+};
+let teamMembersCache = null; // { recId: { name, email } }
+
+async function ensureTeamMembersLoaded() {
+    if (teamMembersCache) return teamMembersCache;
+    teamMembersCache = {};
+    try {
+        // Only Active team members. Historical inactive records still exist
+        // in Airtable (preserving linked data), but they don't appear here
+        // and therefore don't inherit onto newly-pushed tasks.
+        const params = new URLSearchParams({
+            filterByFormula: '{Active}=TRUE()',
+            returnFieldsByFieldId: 'true',
+            pageSize: '100',
+        });
+        const data = await airtableFetch(`${TEAM_MEMBERS_TABLE}?${params.toString()}`);
+        (data.records || []).forEach(r => {
+            const memberObj = r.fields?.[TM_F.member];
+            const email = memberObj?.email || '';
+            if (!email) return;
+            const name = (r.fields?.[TM_F.preferredName] || '').trim()
+                || (r.fields?.[TM_F.fullLegalName] || '').trim()
+                || (r.fields?.[TM_F.name] || '').trim()
+                || '';
+            teamMembersCache[r.id] = { name, email };
+        });
+    } catch (e) {
+        console.warn('[ensureTeamMembersLoaded] failed', e);
+    }
+    return teamMembersCache;
+}
+
+// Tasks table field IDs (matches os/tasks/index.html F constants).
+// Note the Tasks table has TWO time fields that must be kept in sync:
+//   - timeEst (singleSelect, "15 min" / "30 min" / …) — what the UI renders
+//   - timeDur (duration, seconds)                    — used by calendar/auto-schedule
+// An Airtable automation used to sync them on create; Kevin turned it off,
+// so the web app now writes both directly.
+const TASK_F = {
+    name:         'fldgFjGBw6bTKJFCD',
+    dueDate:      'fld7XP8w8kbxfETV4',
+    status:       'fldx4qCw17UfrKpaN',
+    assignee:     'fldELMncVJYPDRJNc',
+    priority:     'fldS21RwmwOqt71LI',
+    timeEst:      'fld10VzzbiNNgRmIi', // singleSelect: '15 min', '30 min', ...
+    timeDur:      'flduPjY0p7MmQzDvH', // duration in seconds
+    desc:         'fldRGhBQViKZKtkQ6',
+    business:     'fldLu1Y4GzyWcDoxr',
+    projects:     'fldBg0rQy0FrOAkRN',
+    collaborators:'fldcq3t6uAPgWSOP8', // multipleCollaborators — mirrored from project
+};
+
+// Kevin's Airtable collaborator email — Assignee is a singleCollaborator.
+const KEVIN_EMAIL = 'kevin@runpreneur.org.uk';
+const DEFAULT_TASK_TIME_EST = '15 min';                // singleSelect display value
+const DEFAULT_TASK_DURATION_SECONDS = 15 * 60;         // 900s — same duration, numeric form
+
+let pushOfferDismissedForRecord = null;
+
+function offerProjectPush() {
+    if (!currentRecord) return;
+    if (pushOfferDismissedForRecord === currentRecord.id) return;
+    const { businessId, quarter, year } = getSelection();
+    if (!businessId) return;
+    // Read from the form so we see whatever the founder just typed, not
+    // whatever shape the Airtable response came back in.
+    const fields = readAllFormFields();
+    const qps = OBJSTRAT.quarterlyProjects
+        .map((fid, i) => ({ i, text: (fields[fid] || '').trim() }))
+        .filter(q => q.text);
+    if (!qps.length) return;
+
+    const host = document.getElementById('statusBar');
+    host.className = 'status-bar';
+    host.style.display = 'block';
+    host.innerHTML = `<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:space-between">
+        <span>Push ${qps.length} Quarterly Project${qps.length === 1 ? '' : 's'} to the Projects table? This will create ${qps.length} linked project record${qps.length === 1 ? '' : 's'} in the Projects table for ${escapeHtml(quarter)} ${escapeHtml(year)}.</span>
+        <span style="display:flex;gap:6px">
+            <button class="btn btn-ghost" id="pushLaterBtn">Not now</button>
+            <button class="btn btn-primary" id="pushNowBtn">Push projects →</button>
+        </span>
+    </div>`;
+    document.getElementById('pushLaterBtn').onclick = () => {
+        pushOfferDismissedForRecord = currentRecord.id;
+        setStatus('', '');
+    };
+    document.getElementById('pushNowBtn').onclick = async () => {
+        const btn = document.getElementById('pushNowBtn');
+        if (btn) btn.disabled = true;
+        const overlay = showProgressOverlay('Building preview…');
+        try {
+            const proposal = await buildPushProposal(qps, fields, overlay.update);
+            overlay.close();
+            showPushApprovalModal(proposal, fields);
+        } catch (e) {
+            console.error('[post-save push preview]', e);
+            overlay.close();
+            setStatus('error', `Couldn't build preview: ${e.message || e}`);
+        }
+        if (btn) btn.disabled = false;
+    };
+}
+
+// Invoked from the "Push Projects →" button. Builds a proposal (projects +
+// AI-extracted tasks from monthly stepping stones) and shows an approval
+// modal before anything is written to Airtable.
+async function pushProjectsManually() {
+    if (!currentRecord) {
+        setStatus('warn', 'Save the plan first, then push projects.');
+        return;
+    }
+    const fields = readAllFormFields();
+    const qps = OBJSTRAT.quarterlyProjects
+        .map((fid, i) => ({ i, text: (fields[fid] || '').trim() }))
+        .filter(q => q.text);
+    if (!qps.length) {
+        setStatus('warn', 'No Quarterly Projects to push — add some text to Quarterly Project 1/2/3 first, then Save changes, then try again.');
+        return;
+    }
+
+    const btn = document.getElementById('pushProjBtn');
+    if (btn) btn.disabled = true;
+    const overlay = showProgressOverlay('Building preview…');
+
+    let proposal;
+    try {
+        proposal = await buildPushProposal(qps, fields, overlay.update);
+    } catch (e) {
+        console.error('[pushProjectsManually] buildPushProposal', e);
+        overlay.close();
+        setStatus('error', `Couldn't build task preview: ${e.message || e}`);
+        if (btn) btn.disabled = false;
+        return;
+    }
+    overlay.close();
+    if (btn) btn.disabled = false;
+    showPushApprovalModal(proposal, fields);
+}
+
+// Modal-style progress overlay — used during multi-step async flows where
+// the user needs to see the app is working (push preview, executePush, etc).
+// Returns { update(msg), close() }. Stacks under the merge/push modals by
+// default (z-index 9500) but can be flagged topmost for blocking operations.
+function showProgressOverlay(initialMsg) {
+    document.getElementById('strategyProgressOverlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'strategyProgressOverlay';
+    overlay.className = 'strategy-progress-overlay';
+    overlay.innerHTML = `<div class="strategy-progress-card">
+        <div class="strategy-progress-spinner"></div>
+        <div class="strategy-progress-msg" id="strategyProgressMsg">${escapeHtml(initialMsg || 'Working…')}</div>
+    </div>`;
+    document.body.appendChild(overlay);
+    const msgEl = overlay.querySelector('#strategyProgressMsg');
+    return {
+        update(msg) { if (msgEl && msg) msgEl.textContent = msg; },
+        close() { overlay.remove(); },
+    };
+}
+
+// Snapshot every form field by its data-field-id into a { fid: value } map.
+// This is the single source of truth for what's currently on screen. Used
+// when we need to operate on current form state (save/push) independently of
+// whatever the last Airtable response looked like.
+function readAllFormFields() {
+    const out = {};
+    document.querySelectorAll('[data-field-id]').forEach(el => {
+        const fid = el.dataset.fieldId;
+        const raw = el.value;
+        // Number inputs — coerce empty to null so Airtable clears the cell
+        // rather than rejecting "".
+        if (el.type === 'number') {
+            if (raw === '' || raw == null) { out[fid] = null; return; }
+            const n = Number(raw);
+            out[fid] = isNaN(n) ? null : n;
+            return;
+        }
+        // singleCollaborator — Airtable expects { email: ... } or null.
+        if (el.dataset.type === 'collaborator') {
+            out[fid] = raw ? { email: raw } : null;
+            return;
+        }
+        out[fid] = raw || '';
+    });
+    return out;
+}
+
+// Build a preview of what the push will create — projects + AI-extracted
+// tasks from each monthly stepping stone. Also checks which projects already
+// exist in Projects OS for this business/quarter so we can flag duplicates
+// and skip them on write.
+// `onProgress(msg)` is called at each long-running step so the UI can show
+// what's happening during the 5-15s preview build.
+async function buildPushProposal(qps, fields, onProgress) {
+    const report = onProgress || (() => {});
+    const { businessId, quarter, year } = getSelection();
+    const qIdx = QUARTERS.indexOf(quarter);
+    const yearNum = parseInt(year, 10);
+    const starts = [[1, 1], [4, 1], [7, 1], [10, 1]];
+    const ends   = [[3, 31], [6, 30], [9, 30], [12, 31]];
+    const pad = n => String(n).padStart(2, '0');
+    const qStartISO = `${yearNum}-${pad(starts[qIdx][0])}-${pad(starts[qIdx][1])}`;
+    const qEndISO   = `${yearNum}-${pad(ends[qIdx][0])}-${pad(ends[qIdx][1])}`;
+    const monthEndsInQuarter = [0, 1, 2].map(m => {
+        const mo = starts[qIdx][0] + m;
+        const lastDay = new Date(yearNum, mo, 0).getDate();
+        return `${yearNum}-${pad(mo)}-${pad(lastDay)}`;
+    });
+
+    report('Checking for existing projects…');
+    // Dedup signal #1 — direct record-ID link from the O&S record. This is
+    // the authoritative way to identify an existing Project for a given QP;
+    // it survives renames on either side.
+    const linkedProjectIds = [null, null, null];
+    if (currentRecord && currentRecord.fields) {
+        OBJSTRAT.qpDetails.forEach((det, i) => {
+            const link = currentRecord.fields[det.linkedProject];
+            if (Array.isArray(link) && link[0]) {
+                linkedProjectIds[i] = typeof link[0] === 'object' ? link[0].id : link[0];
+            }
+        });
+    }
+    // Fetch the linked Project records so we can read their current
+    // collaborators (for inheritance onto new tasks).
+    const linkedProjectsById = {};
+    const idsToFetch = linkedProjectIds.filter(Boolean);
+    if (idsToFetch.length) {
+        try {
+            const orClauses = idsToFetch.map(id => `RECORD_ID()="${id}"`).join(',');
+            const filter = idsToFetch.length === 1 ? orClauses : `OR(${orClauses})`;
+            const params = new URLSearchParams({
+                filterByFormula: filter,
+                returnFieldsByFieldId: 'true',
+                pageSize: String(Math.max(1, idsToFetch.length)),
+            });
+            const data = await airtableFetch(`${TABLES.projects}?${params.toString()}`);
+            (data.records || []).forEach(r => {
+                const collabLinks = r.fields?.[PROJ_F_READ.projCollabs] || [];
+                const collaboratorIds = Array.isArray(collabLinks)
+                    ? collabLinks.map(c => typeof c === 'object' ? c.id : c).filter(Boolean)
+                    : [];
+                const taskCount = linkIdsOf(r.fields?.[PROJ_CLOSE_F.linkedTasks]).length;
+                linkedProjectsById[r.id] = { id: r.id, collaboratorIds, taskCount };
+            });
+        } catch (e) { console.warn('[buildPushProposal] linked project fetch failed', e); }
+    }
+
+    // Dedup signal #2 — name + start-date match, used as a fallback for O&S
+    // records that don't have a linkedProject yet (pre-migration records).
+    let existingByName = new Map();   // name → { id, collaboratorIds }
+    try {
+        const business = allBusinessesLocal.find(b => b.id === businessId);
+        const businessName = (business?.name || '').replace(/"/g, '\\"');
+        const filter = `AND(` +
+            `FIND("${businessName}", ARRAYJOIN({Business}))>0, ` +
+            `DATETIME_FORMAT({Start Date}, "YYYY-MM-DD") = "${qStartISO}"` +
+        `)`;
+        const params = new URLSearchParams({
+            filterByFormula: filter,
+            returnFieldsByFieldId: 'true',
+            pageSize: '100',
+        });
+        const data = await airtableFetch(`${TABLES.projects}?${params.toString()}`);
+        (data.records || []).forEach(r => {
+            const n = r.fields?.[PROJ_F.name];
+            if (!n) return;
+            const collabLinks = r.fields?.[PROJ_F_READ.projCollabs] || [];
+            const collaboratorIds = Array.isArray(collabLinks)
+                ? collabLinks.map(c => typeof c === 'object' ? c.id : c).filter(Boolean)
+                : [];
+            const taskCount = linkIdsOf(r.fields?.[PROJ_CLOSE_F.linkedTasks]).length;
+            existingByName.set(String(n).trim().toLowerCase(), { id: r.id, collaboratorIds, taskCount });
+        });
+    } catch (e) {
+        console.warn('[buildPushProposal] project dedup check failed — will still allow push', e);
+    }
+
+    // Load Team Members once so we can resolve Project Collaborator record
+    // IDs → emails for Task.Collaborators writes later.
+    report('Loading team…');
+    await ensureTeamMembersLoaded();
+
+    const proposal = { quarter, year, qStartISO, qEndISO, projects: [] };
+    for (const qp of qps) {
+        const det = OBJSTRAT.qpDetails[qp.i];
+        const projectName = deriveProjectName(qp.text);
+        // Prefer the direct record-ID link; fall back to name match.
+        const linkedId = linkedProjectIds[qp.i];
+        let existingInfo = linkedId ? linkedProjectsById[linkedId] : null;
+        if (!existingInfo) {
+            const nameKey = projectName.trim().toLowerCase();
+            existingInfo = existingByName.get(nameKey);
+        }
+        const alreadyExists = !!existingInfo;
+        const existingProjectId = existingInfo ? existingInfo.id : null;
+        // Resolve the existing project's collaborators to Airtable user emails
+        // so we can mirror them onto new tasks linked to this project.
+        const inheritedCollabEmails = existingInfo && existingInfo.collaboratorIds
+            ? existingInfo.collaboratorIds
+                .map(mid => teamMembersCache?.[mid]?.email)
+                .filter(Boolean)
+            : [];
+
+        // For existing projects, just count the tasks already linked for the
+        // modal's "N tasks already linked" summary. We don't re-extract.
+        //
+        // Counted from the project's own 'Linked Tasks' field, captured when the
+        // project records were fetched above — no second request. The previous
+        // version queried the Tasks table with
+        //   FIND(projectId, ARRAYJOIN({Projects}))
+        // and always reported 0, for two independent reasons: ARRAYJOIN on a link
+        // field joins primary-field NAMES not record IDs (same trap already
+        // documented on fetchOpenTasksForProject below), and it sent pageSize=200
+        // when Airtable's maximum is 100, so the request 422'd and the count fell
+        // into the catch. Verified 6 Aug 2026.
+        const existingTaskCount = alreadyExists ? (existingInfo.taskCount || 0) : 0;
+        const existingTaskNames = new Set(); // kept for backwards-compat in the loop
+
+        const stones = OBJSTRAT.monthlyStones[qp.i].map(sFid => (fields[sFid] || '').trim());
+        const tasksByMonth = [[], [], []];
+        // Existing projects: skip task extraction entirely. AI task names are
+        // not deterministic between runs, so even a "dedup by name" approach
+        // would re-push near-identical tasks. Kevin's rule: if a project is
+        // already there with tasks, leave it alone. Only NEW projects get
+        // their stones broken into tasks on push.
+        if (!alreadyExists) {
+            for (let m = 0; m < 3; m++) {
+                const stone = stones[m];
+                if (!stone || /^(n\/?a|tbc|skip|none|-|—|…)$/i.test(stone)) continue;
+                report(`Extracting tasks for QP${qp.i + 1}, month ${m + 1}…`);
+                const extracted = await extractTasksFromStone(stone, qp.i + 1, m + 1, projectName);
+                tasksByMonth[m] = extracted.map(name => ({
+                    name,
+                    dueISO: monthEndsInQuarter[m],
+                    month: m + 1,
+                    exists: false,
+                }));
+            }
+        }
+
+        // Resolve KPI Target (number field — raw or coerced) and Owner
+        // (singleCollaborator → { email }) from the strategy record. These
+        // port into the Projects table on push.
+        let kpiTarget = null;
+        if (det.kpiTarget) {
+            const tv = fields[det.kpiTarget];
+            if (tv !== undefined && tv !== null && tv !== '') {
+                const n = Number(tv);
+                if (!isNaN(n)) kpiTarget = n;
+            }
+        }
+        let ownerEmail = '';
+        if (det.owner) {
+            const ov = fields[det.owner];
+            if (ov && typeof ov === 'object') ownerEmail = ov.email || '';
+            else if (typeof ov === 'string') ownerEmail = ov;
+        }
+
+        proposal.projects.push({
+            qp,
+            projectName,
+            qpText: qp.text,
+            dod: (fields[det.dod] || '').trim(),
+            kpiName: (fields[det.kpiName] || '').trim(),
+            kpiUnit: extractSelectName(fields[det.kpiUnit]) || '',
+            kpiTarget,
+            ownerEmail,
+            tracking: (fields[det.tracking] || '').trim(),
+            stones,
+            tasksByMonth,
+            alreadyExists,
+            existingProjectId,
+            inheritedCollabEmails,
+            existingTaskCount,
+        });
+    }
+    return proposal;
+}
+
+// Ask Sonnet to break a monthly stepping stone into discrete, actionable
+// tasks. A stone like "Website finalised with call booking and Stripe
+// integrated for product sales" becomes two tasks. A stone like "Complete
+// 5 Woodcock renovation" stays a single task.
+async function extractTasksFromStone(stoneText, projectNumber, monthNumber, projectName) {
+    const system = buildCachedWizardSystem(
+        `Strategy Plan — extracting tasks from a monthly stepping stone.`,
+        `You are breaking down a monthly stepping stone into discrete, actionable tasks for a task management system.
+
+Context:
+- Quarterly Project: "${projectName}"
+- Month: ${monthNumber} of 3 in this quarter
+- Stepping stone text: "${stoneText}"
+
+Your job: extract the discrete tasks implied by the stepping stone. If the stone reads as a single deliverable, return one task. If it contains multiple distinct deliverables joined by "and", commas, or similar, split them into separate tasks.
+
+RULES:
+- Return a JSON object {"tasks": ["task 1", "task 2", ...]} — nothing else.
+- Each task name: short, imperative, 3–10 words. E.g. "Finalise website" not "Website will be finalised".
+- Preserve specific names, numbers, and products the founder used.
+- Don't invent tasks that aren't implied by the stone.
+- Don't split a single deliverable into sub-steps — each task should match one bullet-point-sized deliverable.
+- UK English.`
+    );
+    try {
+        const res = await fetch(AI_PROXY, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: AI_MODEL_DEFAULT,
+                max_tokens: 800,
+                system,
+                messages: [{ role: 'user', content: `Stone: "${stoneText}"\n\nReturn the JSON task list now.` }],
+            }),
+        });
+        if (!res.ok) return [stoneText];  // fail open — keep the stone as one task
+        const data = await res.json();
+        const raw = (data.content?.[0]?.text || '').trim();
+        const match = raw.match(/\{[\s\S]*\}/);
+        if (!match) return [stoneText];
+        const parsed = JSON.parse(match[0]);
+        const tasks = Array.isArray(parsed.tasks) ? parsed.tasks.map(t => String(t).trim()).filter(Boolean) : [];
+        return tasks.length ? tasks : [stoneText];
+    } catch (e) {
+        console.warn('[extractTasksFromStone] falling back to single task', e);
+        return [stoneText];
+    }
+}
+
+// Approval modal — shows the full proposal (projects + tasks per month) and
+// lets the user approve everything, approve projects only, or cancel.
+function showPushApprovalModal(proposal, fields) {
+    // Remove any existing modal first
+    document.getElementById('pushModal')?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'pushModal';
+    overlay.className = 'push-modal-overlay';
+
+    // Aggregate counts — "new" means records we'll actually create.
+    const newProjects = proposal.projects.filter(p => !p.alreadyExists);
+    const existingProjects = proposal.projects.filter(p => p.alreadyExists);
+    const countNewTasks = proposal.projects.reduce((n, p) =>
+        n + p.tasksByMonth.reduce((nn, m) => nn + m.filter(t => !t.exists).length, 0), 0);
+    const countExistingTasks = proposal.projects.reduce((n, p) =>
+        n + p.tasksByMonth.reduce((nn, m) => nn + m.filter(t => t.exists).length, 0), 0);
+
+    const projectsHtml = proposal.projects.map((p, i) => {
+        // Existing projects: no task list. Just a summary line acknowledging
+        // its tasks already exist so we don't re-push anything for it.
+        if (p.alreadyExists) {
+            return `
+            <div class="push-project push-project-existing">
+                <div class="push-project-head">
+                    <span class="push-project-num">QP${p.qp.i + 1}</span>
+                    <span class="push-project-name">${escapeHtml(p.projectName)}</span>
+                    <span class="push-exists-badge">Existing · not touched</span>
+                </div>
+                <div class="push-project-meta" style="font-size:12px;color:var(--text-muted);font-style:italic">
+                    ${p.existingTaskCount
+                        ? `${p.existingTaskCount} task${p.existingTaskCount === 1 ? '' : 's'} already linked. No changes will be made to this project.`
+                        : 'No changes will be made to this project.'}
+                </div>
+            </div>`;
+        }
+        // New project — render task list to be created.
+        const monthsHtml = p.tasksByMonth.map((tasks, m) => {
+            if (!tasks.length) return '';
+            const header = `<div class="push-month-label">Month ${m + 1} — due ${tasks[0].dueISO}</div>`;
+            const items = tasks.map(t => `<li>${escapeHtml(t.name)}</li>`).join('');
+            return `${header}<ul class="push-task-list">${items}</ul>`;
+        }).join('');
+        return `
+        <div class="push-project">
+            <div class="push-project-head">
+                <span class="push-project-num">QP${p.qp.i + 1}</span>
+                <span class="push-project-name">${escapeHtml(p.projectName)}</span>
+            </div>
+            <div class="push-project-meta"><strong>Tasks assigned to:</strong> ${escapeHtml(pushAssigneeLabel(p.ownerEmail))}</div>
+            ${p.kpiName ? `<div class="push-project-meta"><strong>KPI:</strong> ${escapeHtml(p.kpiName)}${p.kpiUnit ? ' (' + escapeHtml(p.kpiUnit) + ')' : ''}</div>` : ''}
+            ${p.dod ? `<div class="push-project-meta"><strong>Definition of Done:</strong> ${escapeHtml(p.dod)}</div>` : ''}
+            <div class="push-project-tasks">
+                ${monthsHtml || '<div style="font-size:12px;color:var(--text-muted);font-style:italic">No monthly stepping stones to convert to tasks.</div>'}
+            </div>
+        </div>`;
+    }).join('');
+
+    const totalNewRecords = newProjects.length + countNewTasks;
+    const dedupNoteParts = [];
+    if (existingProjects.length) dedupNoteParts.push(`${existingProjects.length} existing project${existingProjects.length === 1 ? '' : 's'} will be reused (no duplicate created)`);
+    if (countExistingTasks) dedupNoteParts.push(`${countExistingTasks} task${countExistingTasks === 1 ? '' : 's'} already exist and will be skipped`);
+    const dedupNote = dedupNoteParts.length
+        ? `<div style="font-size:12px;color:var(--info);margin-bottom:12px;padding:8px 12px;background:var(--info-bg);border-radius:6px;border:1px solid var(--info-bg)">${dedupNoteParts.join(' · ')}.</div>`
+        : '';
+
+    const approveLabel = totalNewRecords === 0
+        ? 'Nothing new to create'
+        : `Approve · create ${totalNewRecords} new record${totalNewRecords === 1 ? '' : 's'}`;
+
+    overlay.innerHTML = `
+    <div class="push-modal">
+        <div class="push-modal-head">
+            <div>
+                <div class="push-modal-title">Push to Projects &amp; Tasks</div>
+                <div class="push-modal-sub">${newProjects.length} new project${newProjects.length === 1 ? '' : 's'} · ${countNewTasks} new task${countNewTasks === 1 ? '' : 's'} · ${escapeHtml(proposal.quarter)} ${escapeHtml(proposal.year)}</div>
+            </div>
+            <button class="push-modal-close" type="button">&times;</button>
+        </div>
+        <div class="push-modal-body">
+            ${dedupNote}
+            <div style="font-size:12px;color:var(--text-muted);margin-bottom:12px">Each task is assigned to its project's owner (shown per project below), priority <strong>Project</strong>, duration <strong>15 min</strong>, linked to the project + business, due by end of its month. Review and approve.</div>
+            ${projectsHtml}
+        </div>
+        <div class="push-modal-foot">
+            <button class="btn btn-ghost" type="button" id="pushCancelBtn">Cancel</button>
+            <button class="btn btn-ghost" type="button" id="pushProjOnlyBtn"${newProjects.length === 0 ? ' disabled' : ''}>Projects only (no tasks)</button>
+            <button class="btn btn-primary" type="button" id="pushApproveBtn"${totalNewRecords === 0 ? ' disabled' : ''}>${approveLabel}</button>
+        </div>
+    </div>`;
+
+    document.body.appendChild(overlay);
+    const close = () => overlay.remove();
+    overlay.querySelector('.push-modal-close').onclick = close;
+    overlay.querySelector('#pushCancelBtn').onclick = close;
+    overlay.querySelector('#pushProjOnlyBtn').onclick = () => { close(); executePush(proposal, fields, { tasks: false }); };
+    overlay.querySelector('#pushApproveBtn').onclick = () => { close(); executePush(proposal, fields, { tasks: true }); };
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+}
+
+// Actually create the Airtable records. Runs after user approves the preview.
+async function executePush(proposal, fields, opts) {
+    const { businessId } = getSelection();
+    const btn = document.getElementById('pushProjBtn');
+    if (btn) btn.disabled = true;
+
+    // Existing projects are never touched on push — no new tasks, no name
+    // updates — only new projects write anything. Task dedup for existing
+    // ones was unreliable (AI names drift between runs), so the rule is
+    // "leave what's already there alone".
+    const newProjects = proposal.projects.filter(p => !p.alreadyExists);
+    const countNewTasks = proposal.projects.reduce((n, p) =>
+        n + (p.alreadyExists ? 0 : p.tasksByMonth.reduce((nn, m) => nn + m.filter(t => !t.exists).length, 0)), 0);
+    const overlay = showProgressOverlay(`Creating ${newProjects.length} project${newProjects.length === 1 ? '' : 's'}${opts.tasks ? ` + ${countNewTasks} task${countNewTasks === 1 ? '' : 's'}` : ''}…`);
+
+    const results = {
+        projectsCreated: 0, projectsReused: 0,
+        tasksCreated: 0, tasksSkipped: 0,
+        failed: 0, errors: [],
+    };
+
+    for (const p of proposal.projects) {
+        // 1. Project — reuse existing ID or create a new one.
+        let projectId = p.existingProjectId;
+        if (p.alreadyExists) {
+            results.projectsReused++;
+        } else {
+            const projBody = { fields: {}, typecast: true };
+            projBody.fields[PROJ_F.name] = p.projectName;
+            projBody.fields[PROJ_F.business] = [businessId];
+            projBody.fields[PROJ_F.startDate] = proposal.qStartISO;
+            projBody.fields[PROJ_F.endDate] = proposal.qEndISO;
+            projBody.fields[PROJ_F.dod] = p.dod || p.qpText;
+            if (p.kpiName) projBody.fields[PROJ_F.kpiName] = p.kpiName;
+            if (p.kpiUnit) projBody.fields[PROJ_F.kpiUnit] = p.kpiUnit;
+            if (p.kpiTarget != null) projBody.fields[PROJ_F.kpiTarget] = p.kpiTarget;
+            if (p.tracking) projBody.fields[PROJ_F.kpiTracking] = p.tracking;
+            if (p.ownerEmail) projBody.fields[PROJ_F.owner] = { email: p.ownerEmail };
+            // Stamp the status from the shared rule rather than letting
+            // Airtable's "Not Started" default stick. Pushing next quarter's
+            // plan early correctly yields "Not Started"; pushing mid-quarter
+            // yields the real health. Left unset, the default never cleared —
+            // five Q3 2026 projects read "Not Started" 33 days in.
+            if (typeof computeProjectHealth === 'function') {
+                const health = computeProjectHealth({
+                    start: proposal.qStartISO,
+                    end: proposal.qEndISO,
+                    kpiTarget: p.kpiTarget,
+                    kpiCurrent: 0,
+                    totalTasks: 0,
+                    completedTasks: 0,
+                });
+                if (typeof isWritableStatus === 'function' && isWritableStatus(health)) {
+                    projBody.fields[PROJ_F.status] = health;
+                }
+            }
+            try {
+                const created = await airtableFetch(TABLES.projects, { method: 'POST', body: JSON.stringify(projBody) });
+                projectId = created.id;
+                results.projectsCreated++;
+                // Write the new Project's record ID back onto the O&S record's
+                // QP{n} Project field, so future pushes dedup by link and
+                // renames are safe.
+                if (currentRecord && currentRecord.id) {
+                    const det = OBJSTRAT.qpDetails[p.qp.i];
+                    try {
+                        await airtableFetch(`${TABLES.objStrat}/${currentRecord.id}?returnFieldsByFieldId=true`, {
+                            method: 'PATCH',
+                            body: JSON.stringify({ fields: { [det.linkedProject]: [projectId] }, typecast: true }),
+                        });
+                        if (currentRecord.fields) currentRecord.fields[det.linkedProject] = [{ id: projectId }];
+                    } catch (linkErr) {
+                        console.warn('[executePush] failed to write back linkedProject for QP' + (p.qp.i + 1), linkErr);
+                    }
+                }
+            } catch (e) {
+                console.error('[executePush] project failed QP' + (p.qp.i + 1), e, projBody);
+                results.failed++;
+                results.errors.push(`QP${p.qp.i + 1} project: ${e.message || String(e)}`);
+                continue;
+            }
+        }
+
+        // 2. Tasks — one per extracted item, linked to the (new or existing)
+        // project. Skip tasks whose names already exist on that project.
+        if (!opts.tasks) continue;
+        if (!projectId) continue;
+        // Don't touch existing projects — their tasks already exist and AI
+        // task-name drift means dedup is unreliable. New projects only.
+        if (p.alreadyExists) continue;
+        overlay.update(`Creating tasks for "${p.projectName.slice(0, 40)}…"`);
+        for (const month of p.tasksByMonth) {
+            for (const t of month) {
+                if (t.exists) { results.tasksSkipped++; continue; }
+                const taskBody = { fields: {}, typecast: true };
+                taskBody.fields[TASK_F.name] = t.name;
+                taskBody.fields[TASK_F.dueDate] = t.dueISO;
+                taskBody.fields[TASK_F.status] = 'Upcoming';
+                taskBody.fields[TASK_F.priority] = 'Project';
+                // Assign to the project's owner (the KPI owner captured on the
+                // plan). Kevin is the FALLBACK, not the default — pushing a
+                // client's plan must never assign their tasks to Kevin. Fixed
+                // 1 Aug 2026; was hardcoded to KEVIN_EMAIL since the push
+                // shipped (known defect raised 31 Jul).
+                taskBody.fields[TASK_F.assignee] = { email: p.ownerEmail || KEVIN_EMAIL };
+                taskBody.fields[TASK_F.timeEst] = DEFAULT_TASK_TIME_EST;
+                taskBody.fields[TASK_F.timeDur] = DEFAULT_TASK_DURATION_SECONDS;
+                taskBody.fields[TASK_F.business] = [businessId];
+                taskBody.fields[TASK_F.projects] = [projectId];
+                taskBody.fields[TASK_F.desc] = `From ${proposal.quarter} ${proposal.year} Month ${t.month} stepping stone of "${p.projectName}".`;
+                // Inherit the project's collaborators onto the task so the right
+                // people see it in their queue. Only for existing projects — new
+                // ones have no collaborators until the user adds them.
+                if (p.inheritedCollabEmails && p.inheritedCollabEmails.length) {
+                    taskBody.fields[TASK_F.collaborators] = p.inheritedCollabEmails.map(email => ({ email }));
+                }
+                try {
+                    const created = await airtableFetch(TABLES.tasks, { method: 'POST', body: JSON.stringify(taskBody) });
+                    results.tasksCreated++;
+                    // Kevin's Tasks table has an Airtable automation that fires on
+                    // task create and sets Due Date to today + Time to 15 min
+                    // regardless of what we send. Re-assert our values via a
+                    // follow-up PATCH so our month-end dates win. Time also
+                    // re-set defensively in case the automation clears it.
+                    try {
+                        await airtableFetch(`${TABLES.tasks}/${created.id}`, {
+                            method: 'PATCH',
+                            body: JSON.stringify({ fields: {
+                                [TASK_F.dueDate]: t.dueISO,
+                                [TASK_F.timeEst]: DEFAULT_TASK_TIME_EST,
+                                [TASK_F.timeDur]: DEFAULT_TASK_DURATION_SECONDS,
+                            }, typecast: true }),
+                        });
+                    } catch (patchErr) {
+                        console.warn('[executePush] post-create PATCH failed for', t.name, patchErr);
+                    }
+                } catch (e) {
+                    console.error('[executePush] task failed', t.name, e, taskBody);
+                    results.failed++;
+                    results.errors.push(`Task "${t.name}": ${e.message || String(e)}`);
+                }
+            }
+        }
+    }
+    if (btn) btn.disabled = false;
+    overlay.close();
+
+    if (results.failed === 0) {
+        const bits = [];
+        if (results.projectsCreated) bits.push(`${results.projectsCreated} project${results.projectsCreated === 1 ? '' : 's'}`);
+        if (results.projectsReused) bits.push(`${results.projectsReused} existing project${results.projectsReused === 1 ? '' : 's'} reused`);
+        if (results.tasksCreated) bits.push(`${results.tasksCreated} task${results.tasksCreated === 1 ? '' : 's'}`);
+        if (results.tasksSkipped) bits.push(`${results.tasksSkipped} task${results.tasksSkipped === 1 ? '' : 's'} skipped (already exist)`);
+        setStatus('success', `✓ ${bits.join(' · ')} in Tasks & Projects.`);
+        pushOfferDismissedForRecord = currentRecord.id;
+        setTimeout(() => setStatus('', ''), 6000);
+    } else {
+        const bar = document.getElementById('statusBar');
+        bar.className = 'status-bar error';
+        bar.style.display = 'block';
+        bar.innerHTML = `<div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;justify-content:space-between">
+            <div>
+                <div style="font-weight:600;margin-bottom:4px">Created ${results.projectsCreated} project${results.projectsCreated === 1 ? '' : 's'}, ${results.tasksCreated} task${results.tasksCreated === 1 ? '' : 's'}. ${results.failed} failed.</div>
+                <div style="font-size:12px;opacity:0.9;font-family:monospace;max-height:200px;overflow-y:auto">${results.errors.map(escapeHtml).join('<br>')}</div>
+            </div>
+            <button class="btn btn-ghost" onclick="setStatus('', '')" style="flex-shrink:0">Dismiss</button>
+        </div>`;
+    }
+}
+
+// Who the push will assign a project's tasks to, as a human-readable label
+// for the approval preview. Resolves the owner email to a team-member name
+// where the cache has one; falls back to the email, then to Kevin.
+function pushAssigneeLabel(ownerEmail) {
+    const email = ownerEmail || KEVIN_EMAIL;
+    const member = Object.values(teamMembersCache || {}).find(m => m.email === email);
+    const name = member && member.name ? member.name : email;
+    return ownerEmail ? name : `${name} (no owner set on this project — add one in the KPI box to change this)`;
+}
+
+// Derive a short project name from the QP textarea — first line, or first
+// sentence, up to ~80 chars. Many Strategy QP entries start with a title
+// then a description; grab the title.
+function deriveProjectName(text) {
+    const firstLine = text.split('\n').map(s => s.trim()).find(s => s) || '';
+    // Strip common "Project N:" prefixes so the Projects OS name is clean.
+    const stripped = firstLine.replace(/^project\s*\d+\s*[:\-–]\s*/i, '').trim();
+    // Return the full name — the Task & Project Management OS renders project
+    // cards with word-wrapping now, so there's no UI reason to truncate here.
+    // (Previous 100-char cap was silently truncating real quarterly project names.)
+    return stripped || firstLine;
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// QUARTER CLOSE — freeze first, carry second. Never the other way round.
+//
+// A carried task belongs to both quarters. If the old quarter isn't frozen
+// before the carry, a task finished months later raises the old quarter's
+// completion percentage and a missed quarter starts reading as a win.
+// executeQuarterClose therefore writes the snapshot (Status Override, KPI at
+// Close, Progress at Close, Closed On, Closing Note) and the record comment
+// BEFORE any task is re-linked. Tasks are ADDED to the next quarter's
+// project — the old quarter's link is never removed.
+// ═════════════════════════════════════════════════════════════════════
+
+// Projects table close-protocol field IDs (verified against the live schema
+// and the 31 Jul 2026 worked closes on Launch & First Revenue, Complete all
+// modules, and £12,000 Cushion).
+const PROJ_CLOSE_F = {
+    statusOverride:  'fldgA0nMgLx5jijyG',  // singleSelect: Completed | On-Track | Off-Track | Not Started | On-Target
+    closedOn:        'fldzGI0ywBTpOK2dy',  // date
+    kpiAtClose:      'fld59dgl4EoQmrXT6',  // number
+    progressAtClose: 'fldHZWpvuYF1xsnfs',  // number (percent, 2dp)
+    closingNote:     'fldEx9EOsPeqpJ2gy',  // multilineText
+    kpiCurrent:      'fldB1QJDUsukxKzjQ',  // number — pre-fills KPI at Close
+    kpiName:         'fldABYFMf2yBKWdlD',
+    kpiTarget:       'fldaI0voHia91SYZz',
+    kpiUnit:         'fldrYZEghROXYf6w0',
+    totalTasks:      'fldtw6NQZ8CSF3RXi',  // rollup
+    completedTasks:  'fld7IDjY0xB4JGBfn',  // rollup
+    progress:        'fldoBqdm5Jb97h7yl',  // formula 0..1 — fallback when rollups are absent
+    linkedTasks:     'fldbXYUzJXqrRjfyn',  // 'Linked Tasks' — the LIVE inverse of Task.Projects.
+                                           // ('Tasks' fldYgeWwDMwJ8CDvH is a dead twin: empty on live records.)
+};
+
+const QC_PAUSE_MS = 200;  // between Airtable writes — stays under 5 req/s
+
+function quarterEndISO(quarter, year) {
+    const qIdx = QUARTERS.indexOf(quarter);
+    const ends = [[3, 31], [6, 30], [9, 30], [12, 31]];
+    const pad = n => String(n).padStart(2, '0');
+    return `${year}-${pad(ends[qIdx][0])}-${pad(ends[qIdx][1])}`;
+}
+
+function quarterStartISO(quarter, year) {
+    const qIdx = QUARTERS.indexOf(quarter);
+    const starts = [1, 4, 7, 10];
+    return `${year}-${String(starts[qIdx]).padStart(2, '0')}-01`;
+}
+
+function linkIdsOf(v) {
+    if (!Array.isArray(v)) return [];
+    return v.map(x => (typeof x === 'object' && x ? x.id : x)).filter(Boolean);
+}
+
+async function fetchProjectRecordsByIds(ids) {
+    if (!ids.length) return [];
+    const out = [];
+    for (let i = 0; i < ids.length; i += 50) {
+        const chunk = ids.slice(i, i + 50);
+        const filter = chunk.length === 1
+            ? `RECORD_ID()="${chunk[0]}"`
+            : `OR(${chunk.map(id => `RECORD_ID()="${id}"`).join(',')})`;
+        const params = new URLSearchParams({ filterByFormula: filter, returnFieldsByFieldId: 'true', pageSize: '100' });
+        const data = await airtableFetch(`${TABLES.projects}?${params.toString()}`);
+        out.push(...(data.records || []));
+    }
+    // Preserve the caller's slot order — it mirrors QP order on the plan.
+    return ids.map(id => out.find(r => r.id === id)).filter(Boolean);
+}
+
+// Open = any status except Completed. Task IDs come from the project's
+// Linked Tasks inverse field: filtering the Tasks table with
+// FIND(recId, ARRAYJOIN({Projects})) silently matches nothing, because
+// ARRAYJOIN on a link field joins primary-field NAMES, not record IDs
+// (verified live 1 Aug 2026 — the filter returned 0 rows on a project
+// with 172 linked tasks).
+async function fetchOpenTasksForProject(projectRecord) {
+    const taskIds = linkIdsOf(projectRecord.fields?.[PROJ_CLOSE_F.linkedTasks]);
+    if (!taskIds.length) return [];
+    const open = [];
+    for (let i = 0; i < taskIds.length; i += 50) {
+        const chunk = taskIds.slice(i, i + 50);
+        const idClause = chunk.length === 1
+            ? `RECORD_ID()="${chunk[0]}"`
+            : `OR(${chunk.map(id => `RECORD_ID()="${id}"`).join(',')})`;
+        const params = new URLSearchParams({
+            filterByFormula: `AND(${idClause}, {Status}!="Completed")`,
+            returnFieldsByFieldId: 'true',
+            pageSize: '100',
+        });
+        params.append('fields[]', TASK_F.name);
+        params.append('fields[]', TASK_F.status);
+        params.append('fields[]', TASK_F.projects);
+        const data = await airtableFetch(`${TABLES.tasks}?${params.toString()}`);
+        open.push(...(data.records || []));
+    }
+    return open;
+}
+
+// The next quarter's projects — carry targets. Read from the next quarter's
+// plan record for the same business, via its QP → Project links. Each entry
+// keeps its QP slot index so a closing project's tasks default to the SAME
+// slot next quarter (old QP2 → new QP2), not to whichever project came first.
+async function loadNextQuarterProjects(businessId, nextQuarter, nextYear) {
+    const business = allBusinessesLocal.find(b => b.id === businessId);
+    const businessName = (business?.name || '').replace(/"/g, '\\"');
+    const params = new URLSearchParams({
+        filterByFormula: `AND({Business Name} = "${businessName}", {Quarter} = "${nextQuarter}", {Year} = "${nextYear}")`,
+        maxRecords: '1',
+        returnFieldsByFieldId: 'true',
+    });
+    const data = await airtableFetch(`${TABLES.objStrat}?${params.toString()}`);
+    const rec = (data.records || [])[0];
+    if (!rec) return [];
+    const slots = OBJSTRAT.qpDetails
+        .map((det, i) => ({ slot: i, id: linkIdsOf(rec.fields?.[det.linkedProject])[0] || null }))
+        .filter(s => s.id);
+    const projs = await fetchProjectRecordsByIds(slots.map(s => s.id));
+    return projs.map(p => ({
+        id: p.id,
+        name: p.fields?.[PROJ_F.name] || '(unnamed project)',
+        slot: (slots.find(s => s.id === p.id) || {}).slot ?? 0,
+    }));
+}
+
+function projectProgressPct(fields) {
+    const total = Number(fields?.[PROJ_CLOSE_F.totalTasks]);
+    const done = Number(fields?.[PROJ_CLOSE_F.completedTasks]);
+    if (total > 0 && !isNaN(done)) return Math.round((done / total) * 10000) / 100;
+    const p = Number(fields?.[PROJ_CLOSE_F.progress]);
+    if (!isNaN(p)) return Math.round(p * 10000) / 100;
+    return 0;
+}
+
+function buildClosingNoteDraft(p, ctx) {
+    const f = p.fields || {};
+    const kpiName = f[PROJ_CLOSE_F.kpiName] || 'KPI';
+    const kpiUnit = extractSelectName(f[PROJ_CLOSE_F.kpiUnit]) || '';
+    const kpiTarget = f[PROJ_CLOSE_F.kpiTarget];
+    const kpiCurrent = f[PROJ_CLOSE_F.kpiCurrent];
+    const total = Number(f[PROJ_CLOSE_F.totalTasks]) || 0;
+    const done = Number(f[PROJ_CLOSE_F.completedTasks]) || 0;
+    const pct = projectProgressPct(f);
+    const met = kpiTarget != null && kpiCurrent != null && Number(kpiCurrent) >= Number(kpiTarget);
+    const fmtVal = v => (v == null || v === '') ? '—' : (kpiUnit === '£' ? `£${Number(v).toLocaleString('en-GB')}` : `${v}${kpiUnit === '%' ? '%' : kpiUnit ? ' ' + kpiUnit : ''}`);
+    const today = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    return [
+        `CLOSED ${today} for ${ctx.quarter} (${ctx.qStartISO} - ${ctx.qEndISO}). ${met ? 'MET.' : 'MISSED.'}`,
+        ``,
+        `Target: ${kpiName} ${fmtVal(kpiTarget)}. Actual at close: ${fmtVal(kpiCurrent)}.`,
+        `Tasks: ${done} of ${total} complete (${pct}%).`,
+        ``,
+        `Why the gap: [say why — what stopped it, in one or two sentences]`,
+        ``,
+        `Carried into ${ctx.nextQuarter} ${ctx.nextYear}: [filled in automatically below]`,
+        `Snapshot taken before the carry, so later completions on carried tasks cannot rewrite this quarter's result.`,
+    ].join('\n');
+}
+
+// Entry point — the "Close the quarter" button.
+async function openQuarterClose() {
+    if (!currentRecord) {
+        setStatus('warn', 'Load a plan first — pick the business, quarter and year you want to close.');
+        return;
+    }
+    if (isDirty) {
+        setStatus('warn', 'Save your changes first, then close the quarter.');
+        return;
+    }
+    const { businessId, quarter, year } = getSelection();
+    const btn = document.getElementById('closeQtrBtn');
+    if (btn) btn.disabled = true;
+    const overlay = showProgressOverlay('Preparing the quarter close…');
+    try {
+        // Fresh record — the linked-project fields must be current.
+        const fresh = await airtableFetch(`${TABLES.objStrat}/${currentRecord.id}?returnFieldsByFieldId=true`);
+        currentRecord = fresh;
+        const projSlots = OBJSTRAT.qpDetails
+            .map((det, i) => ({ slot: i, id: linkIdsOf(fresh.fields?.[det.linkedProject])[0] || null }))
+            .filter(p => p.id);
+        if (!projSlots.length) {
+            overlay.close();
+            setStatus('warn', 'No projects are linked to this plan yet — use "Push Projects →" first, then close.');
+            if (btn) btn.disabled = false;
+            return;
+        }
+        overlay.update('Reading the quarter’s projects…');
+        const projects = await fetchProjectRecordsByIds(projSlots.map(p => p.id));
+        const slotById = {};
+        projSlots.forEach(p => { slotById[p.id] = p.slot; });
+
+        const qIdx = QUARTERS.indexOf(quarter);
+        const yearNum = parseInt(year, 10);
+        const nextQuarter = QUARTERS[(qIdx + 1) % 4];
+        const nextYear = qIdx === 3 ? yearNum + 1 : yearNum;
+        overlay.update(`Finding ${nextQuarter} ${nextYear} projects to carry into…`);
+        let nextProjects = [];
+        try {
+            nextProjects = await loadNextQuarterProjects(businessId, nextQuarter, String(nextYear));
+        } catch (e) { /* no next plan yet — everything defaults to Park */ }
+
+        const openTasksByProj = {};
+        for (const p of projects) {
+            const name = p.fields?.[PROJ_F.name] || p.id;
+            overlay.update(`Listing open tasks on "${String(name).slice(0, 40)}"…`);
+            openTasksByProj[p.id] = await fetchOpenTasksForProject(p);
+        }
+        overlay.close();
+        showQuarterCloseModal({
+            quarter, year, qStartISO: quarterStartISO(quarter, yearNum), qEndISO: quarterEndISO(quarter, yearNum),
+            nextQuarter, nextYear, projects, nextProjects, openTasksByProj, slotById,
+        });
+    } catch (e) {
+        overlay.close();
+        setStatus('error', `Couldn't prepare the quarter close: ${e.message || e}`);
+    }
+    if (btn) btn.disabled = false;
+}
+
+// Preview modal — nothing is written until Approve. Same pattern as the
+// project push: see everything, edit the judgement calls, then one click.
+function showQuarterCloseModal(ctx) {
+    document.getElementById('qcModal')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'qcModal';
+    overlay.className = 'push-modal-overlay';
+
+    const statusChoices = ['Completed', 'Off-Track', 'On-Track', 'On-Target', 'Not Started'];
+
+    // Carry dropdown per closing project: default to the SAME QP slot next
+    // quarter (old P2's tasks → new P2), Park when that slot has no project.
+    const carryOptionsFor = (slot) => {
+        const match = ctx.nextProjects.find(np => np.slot === slot);
+        return ctx.nextProjects.map(np =>
+            `<option value="${np.id}"${match && np.id === match.id ? ' selected' : ''}>${escapeHtml(np.name)}</option>`).join('')
+            + `<option value=""${match ? '' : ' selected'}>Park — stays in this quarter only</option>`;
+    };
+    const taskRowsHtml = (openTasks, slot) => openTasks.length
+        ? openTasks.map(t => `
+            <div class="qc-task-row" data-task-id="${t.id}">
+                <span class="qc-task-name">${escapeHtml(t.fields?.[TASK_F.name] || '(untitled task)')}</span>
+                <select class="qc-carry-sel" data-task-id="${t.id}" aria-label="Where this open task carries to">
+                    ${carryOptionsFor(slot)}
+                </select>
+            </div>`).join('')
+        : `<div class="qc-no-tasks">No open tasks — nothing to carry.</div>`;
+
+    const projectsHtml = ctx.projects.map((p, idx) => {
+        const f = p.fields || {};
+        const name = f[PROJ_F.name] || '(unnamed project)';
+        const slot = ctx.slotById?.[p.id] ?? idx;
+        const openTasks = ctx.openTasksByProj[p.id] || [];
+        const alreadyClosed = !!f[PROJ_CLOSE_F.closedOn];
+        if (alreadyClosed) {
+            // The snapshot is frozen and stays frozen. But a previous close
+            // whose carry partly failed can leave open tasks stranded here —
+            // offer the carry (and only the carry) again.
+            return `<div class="push-project push-project-existing qc-project" data-project-id="${p.id}" data-carry-only="1">
+                <div class="push-project-head">
+                    <span class="push-project-num">P${idx + 1}</span>
+                    <span class="push-project-name">${escapeHtml(name)}</span>
+                    <span class="push-exists-badge">Already closed on ${escapeHtml(f[PROJ_CLOSE_F.closedOn])} · snapshot untouched</span>
+                </div>
+                ${openTasks.length
+                    ? `<div class="qc-tasks-head">Open tasks still on this closed project — carry them into ${escapeHtml(ctx.nextQuarter)} ${ctx.nextYear}</div>${taskRowsHtml(openTasks, slot)}`
+                    : `<div class="qc-no-tasks">No open tasks left behind.</div>`}
+            </div>`;
+        }
+        const pct = projectProgressPct(f);
+        const kpiCurrent = f[PROJ_CLOSE_F.kpiCurrent];
+        const kpiTarget = f[PROJ_CLOSE_F.kpiTarget];
+        const met = kpiTarget != null && kpiCurrent != null && Number(kpiCurrent) >= Number(kpiTarget);
+        const defaultStatus = (met || pct >= 100) ? 'Completed' : 'Off-Track';
+        return `<div class="push-project qc-project" data-project-id="${p.id}" data-idx="${idx}">
+            <div class="push-project-head">
+                <span class="push-project-num">P${idx + 1}</span>
+                <span class="push-project-name">${escapeHtml(name)}</span>
+                <label class="qc-include"><input type="checkbox" class="qc-include-cb" checked> Close this project</label>
+            </div>
+            <div class="qc-grid">
+                <label>True outcome
+                    <select class="qc-status">${statusChoices.map(s => `<option${s === defaultStatus ? ' selected' : ''}>${s}</option>`).join('')}</select>
+                </label>
+                <label>KPI at Close <span class="qc-sub">(pre-filled from the current KPI value — change it if the definition of done measures something else)</span>
+                    <input type="number" step="any" class="qc-kpi" value="${kpiCurrent != null ? escapeHtml(String(kpiCurrent)) : '0'}">
+                </label>
+                <label>Progress at Close <span class="qc-sub">(frozen from task completion — read-only)</span>
+                    <input type="number" class="qc-progress" value="${pct}" readonly>
+                </label>
+                <label>Closed On <span class="qc-sub">(the quarter's end date)</span>
+                    <input type="date" class="qc-closedon" value="${ctx.qEndISO}" readonly>
+                </label>
+            </div>
+            <label class="qc-note-label">Closing note <span class="qc-sub">(pre-filled — edit before approving; the same text becomes a permanent record comment)</span>
+                <textarea class="qc-note" rows="8">${escapeHtml(buildClosingNoteDraft(p, ctx))}</textarea>
+            </label>
+            <div class="qc-tasks-head">Open tasks to carry into ${escapeHtml(ctx.nextQuarter)} ${ctx.nextYear} <span class="qc-sub">(ADDED to the new project — the ${escapeHtml(ctx.quarter)} link stays in place)</span></div>
+            ${taskRowsHtml(openTasks, slot)}
+        </div>`;
+    }).join('');
+
+    const noNextWarn = ctx.nextProjects.length ? '' : `
+        <div class="qc-warn-banner">No ${escapeHtml(ctx.nextQuarter)} ${ctx.nextYear} projects exist yet for this business, so every open task defaults to Park.
+        To carry tasks forward, close this modal, write the ${escapeHtml(ctx.nextQuarter)} plan and push its projects first.</div>`;
+
+    overlay.innerHTML = `<div class="push-modal qc-modal" role="dialog" aria-modal="true" aria-label="Close the quarter">
+        <div class="push-modal-head">
+            <div>
+                <div class="push-modal-title">Close ${escapeHtml(ctx.quarter)} ${escapeHtml(ctx.year)}</div>
+                <div class="push-modal-sub">Freeze first, carry second. The snapshot is written before any task is re-linked, so later completions can't rewrite this quarter's result.</div>
+            </div>
+            <button class="push-modal-close" type="button">&times;</button>
+        </div>
+        <div class="push-modal-body">
+            ${noNextWarn}
+            ${projectsHtml}
+        </div>
+        <div class="push-modal-foot">
+            <button class="btn btn-ghost" type="button" id="qcCancelBtn">Cancel</button>
+            <button class="btn btn-primary" type="button" id="qcApproveBtn">Approve · close the quarter</button>
+        </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    // Focusable so Escape works the moment the modal opens.
+    overlay.setAttribute('tabindex', '-1');
+    overlay.focus();
+
+    const close = () => overlay.remove();
+    overlay.querySelector('.push-modal-close').onclick = close;
+    overlay.querySelector('#qcCancelBtn').onclick = close;
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+    overlay.addEventListener('keydown', e => { if (e.key === 'Escape') close(); });
+
+    overlay.querySelector('#qcApproveBtn').onclick = () => {
+        // Read the user's judgement calls out of the modal before closing it.
+        const plan = [];
+        overlay.querySelectorAll('.qc-project').forEach(el => {
+            const carryOnly = el.dataset.carryOnly === '1';
+            const projectId = el.dataset.projectId;
+            const tasks = [];
+            el.querySelectorAll('.qc-carry-sel').forEach(sel => {
+                tasks.push({ taskId: sel.dataset.taskId, targetProjectId: sel.value || null });
+            });
+            if (carryOnly) {
+                // Already-closed project: its frozen snapshot is never touched
+                // again — this pass can only carry (or park) stranded open tasks.
+                if (tasks.length) plan.push({ projectId, carryOnly: true, tasks });
+                return;
+            }
+            if (!el.querySelector('.qc-include-cb').checked) return;
+            plan.push({
+                projectId,
+                carryOnly: false,
+                statusOverride: el.querySelector('.qc-status').value,
+                kpiAtClose: Number(el.querySelector('.qc-kpi').value || 0),
+                progressAtClose: Number(el.querySelector('.qc-progress').value || 0),
+                closedOn: el.querySelector('.qc-closedon').value,
+                closingNote: el.querySelector('.qc-note').value,
+                tasks,
+            });
+        });
+        if (!plan.length) { close(); setStatus('warn', 'Nothing selected to close.'); return; }
+        close();
+        executeQuarterClose(plan, ctx);
+    };
+}
+
+// The write path. THE ORDER IS THE PROTOCOL:
+// per project — snapshot PATCH (Status Override, KPI at Close, Progress at
+// Close, Closed On, Closing Note in one atomic write), then the record
+// comment, and only THEN the task carry. No task is re-linked before its
+// project's snapshot is frozen.
+async function executeQuarterClose(plan, ctx) {
+    const overlay = showProgressOverlay('Freezing the quarter…');
+    const results = { closed: 0, carried: 0, parked: 0, failed: 0, errors: [], commentFailures: 0 };
+    const pause = () => new Promise(r => setTimeout(r, QC_PAUSE_MS));
+
+    for (const p of plan) {
+        // Carry-only passes (a project closed in an earlier run whose carry
+        // partly failed) skip straight to step 7 — the frozen snapshot is
+        // never written twice.
+        if (!p.carryOnly) {
+            const carriedCount = p.tasks.filter(t => t.targetProjectId).length;
+            const parkedCount = p.tasks.filter(t => !t.targetProjectId).length;
+            // Fill the carry line of the note with what is actually happening.
+            const carryLine = `Carried into ${ctx.nextQuarter} ${ctx.nextYear}: ${carriedCount} open task${carriedCount === 1 ? '' : 's'} re-linked (not moved). Parked: ${parkedCount}.`;
+            const note = p.closingNote.replace(/^Carried into .*\[filled in automatically below\]$/m, carryLine);
+
+            // 1-5. THE SNAPSHOT — one atomic PATCH, fields in protocol order.
+            overlay.update('Writing the snapshot…');
+            try {
+                await airtableFetch(`${TABLES.projects}/${p.projectId}`, {
+                    method: 'PATCH',
+                    body: JSON.stringify({
+                        fields: {
+                            [PROJ_CLOSE_F.statusOverride]: p.statusOverride,
+                            [PROJ_CLOSE_F.kpiAtClose]: Number(p.kpiAtClose),
+                            [PROJ_CLOSE_F.progressAtClose]: Number(p.progressAtClose),
+                            [PROJ_CLOSE_F.closedOn]: p.closedOn,
+                            [PROJ_CLOSE_F.closingNote]: note,
+                        },
+                        typecast: true,
+                    }),
+                });
+                results.closed++;
+            } catch (e) {
+                // Snapshot failed → do NOT carry this project's tasks. Carrying
+                // without the freeze is the exact bug this protocol exists to stop.
+                results.failed++;
+                results.errors.push(`Snapshot failed for project ${p.projectId}: ${e.message || e} — its tasks were NOT carried.`);
+                continue;
+            }
+            await pause();
+
+            // 6. The record comment — timestamped, attributed, can't be overwritten.
+            overlay.update('Adding the permanent record comment…');
+            try {
+                await airtableFetch(`${TABLES.projects}/${p.projectId}/comments`, {
+                    method: 'POST',
+                    body: JSON.stringify({ text: note }),
+                });
+            } catch (e) {
+                // Non-fatal: the snapshot fields are already frozen. Say so.
+                results.commentFailures++;
+            }
+            await pause();
+        }
+
+        // 7. THE CARRY — only after the snapshot is frozen. ADD the next
+        // quarter's project to each task's Projects field; never remove the old.
+        for (const t of p.tasks) {
+            if (!t.targetProjectId) { results.parked++; continue; }
+            overlay.update(`Carrying ${results.carried + 1} of ${plan.reduce((n, pp) => n + pp.tasks.filter(x => x.targetProjectId).length, 0)} tasks…`);
+            try {
+                const taskRec = await airtableFetch(`${TABLES.tasks}/${t.taskId}?returnFieldsByFieldId=true`);
+                const existing = linkIdsOf(taskRec.fields?.[TASK_F.projects]);
+                if (!existing.includes(t.targetProjectId)) {
+                    await airtableFetch(`${TABLES.tasks}/${t.taskId}`, {
+                        method: 'PATCH',
+                        body: JSON.stringify({ fields: { [TASK_F.projects]: [...existing, t.targetProjectId] }, typecast: true }),
+                    });
+                }
+                results.carried++;
+            } catch (e) {
+                results.failed++;
+                results.errors.push(`Carry failed for task ${t.taskId}: ${e.message || e}`);
+            }
+            await pause();
+        }
+    }
+    overlay.close();
+
+    // Full re-render from fresh data FIRST — its transient "Loaded…" status
+    // would otherwise overwrite the summary written below.
+    try { await loadRecord(); } catch (e) { /* summary still shows below */ }
+
+    const counts = `${results.carried} carried · ${results.closed} closed · ${results.parked} parked`;
+    if (results.failed === 0) {
+        const commentNote = results.commentFailures
+            ? ` (${results.commentFailures} record comment${results.commentFailures === 1 ? '' : 's'} couldn't be added — the snapshot itself is safely written)`
+            : '';
+        setStatus('success', `✓ Quarter closed: ${counts}.${commentNote}`);
+        setTimeout(() => setStatus('', ''), 8000);
+    } else {
+        const bar = document.getElementById('statusBar');
+        bar.className = 'status-bar error';
+        bar.style.display = 'block';
+        bar.innerHTML = `<div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;justify-content:space-between">
+            <div>
+                <div style="font-weight:600;margin-bottom:4px">Quarter close finished with problems: ${counts} · ${results.failed} failed.</div>
+                <div style="font-size:12px;opacity:0.9;font-family:monospace;max-height:200px;overflow-y:auto">${results.errors.map(escapeHtml).join('<br>')}</div>
+            </div>
+            <button class="btn btn-ghost" onclick="setStatus('', '')" style="flex-shrink:0">Dismiss</button>
+        </div>`;
+    }
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// AI WIZARD — Boardroom Mentor voice, section-by-section interview.
+// Challenges weak answers, pulls previous quarter as context.
+// ═════════════════════════════════════════════════════════════════════
+
+const WIZARD_STEPS = [
+    // ── Objective plan (top of the form — reviewed rarely, but important to
+    //    set the frame before anything below it.)
+    { id: 'reflection', label: 'Quarterly reflection', needsPrior: true,
+      ask: "Looking back at last quarter: what hit, what missed, and why?\n\nI'll use this to calibrate the bar for this quarter — specifically to make sure what slipped becomes a measurable here. One paragraph is plenty.",
+      targetFid: null /* discovery — not saved */ },
+    { id: 'objective', label: 'Objective', targetFid: () => OBJSTRAT.objective,
+      ask: "OBJECTIVE — the overarching reason the business exists.\n\nJust a few words on what you're ultimately trying to produce and for whom. Even one sentence is plenty. I'll turn it into a proper objective statement." },
+    { id: 'targetWhat', label: 'Target — What we do', targetFid: () => OBJSTRAT.targetWhat,
+      ask: "TARGET — WHAT we do.\n\nA few words on the product or service. I'll tighten it into a professional one-liner." },
+    { id: 'targetWho', label: 'Target — Who we do it for', targetFid: () => OBJSTRAT.targetWho,
+      ask: "TARGET — WHO we do it for.\n\nJust the rough customer type — size, stage, anything distinctive. I'll sharpen it into a targeting statement." },
+    { id: 'targetHow', label: 'Target — How we do it', targetFid: () => OBJSTRAT.targetHow,
+      ask: "TARGET — HOW we do it.\n\nA sentence or two on your delivery method — what's different about your approach? I'll write it up." },
+    { id: 'customerProfile', label: 'Customer Profile', targetFid: () => OBJSTRAT.customerProfile,
+      ask: "CUSTOMER PROFILE — who you target and who you don't.\n\nJust give me the rough shape — anything like stage, size, budget, mindset, deal-breakers. A few bullet points will do. I'll flesh it out into a proper profile." },
+    // ── List sections — one question each that gathers the whole list.
+    { id: 'undertakings', kind: 'list', label: 'Undertakings (team rules)', fieldIdsFn: () => OBJSTRAT.undertakings, maxItems: 20,
+      ask: "UNDERTAKINGS — team non-negotiables.\n\nJust list them rough — 'own the outcome', 'tell the truth', 'data not drama', 'no drama'. Even 5–6 is fine, I'll fill in the obvious ones and structure them. If you have some set, tell me what to change ('add one about routine discipline', 'no changes').",
+      descriptionForAI: "A list of non-negotiable team/culture rules for the business. Short title + 2–3 supporting bullets each." },
+    { id: 'usps', kind: 'list', label: 'Original Selling Points (USPs)', fieldIdsFn: () => OBJSTRAT.usps, maxItems: 5,
+      ask: "USPs — why a customer chooses you over anyone else.\n\nJust the rough claims. 'Done-for-you not coaching', 'we take equity', 'AI-first'. I'll turn them into defensible differentiators.",
+      descriptionForAI: "Unique selling points. Each item: a bold claim + a short paragraph backing it up." },
+    { id: 'mainMethod', kind: 'list', label: 'Main Method (step-by-step process)', fieldIdsFn: () => OBJSTRAT.methodSteps, maxItems: 10,
+      ask: "MAIN METHOD — the step-by-step process you follow.\n\nJust the step names in order, even one word each. I'll write the descriptions. E.g. 'Objective, Priorities, Team, Income, Methods, Intelligence, Scoreboards, Exit-ready'.",
+      descriptionForAI: "Sequential steps of the main delivery method. Each item: a short step name + a one-sentence explanation." },
+    { id: 'enticement', label: 'Enticement', targetFid: () => OBJSTRAT.enticement,
+      ask: "ENTICEMENT — the irresistible offer.\n\nA few words on what makes your offer hard to say no to — pricing, risk reversal, equity model, guarantee, turnaround, anything asymmetric. I'll write it up." },
+    // ── Strategy plan (quarterly cadence — where most of the iteration happens.)
+    { id: 'nineYear', label: 'Nine-Year Target', targetFid: () => OBJSTRAT.nineYearTarget,
+      ask: "NINE-YEAR TARGET — the long vision.\n\nJust a few key numbers / facts — income, size, level of founder involvement, any exit notes. I'll turn it into a proper vision statement with business model, portfolio, delivery, team, founder role, lifestyle." },
+    { id: 'threeYear', label: 'Three-Year Target', targetFid: () => OBJSTRAT.threeYearTarget,
+      ask: "THREE-YEAR TARGET — the mid-range vision.\n\nA few numbers and direction markers — income, clients/units, what's automated, what the founder still does. I'll fill in the structure." },
+    { id: 'threeYearM1', label: 'Three-Year Measurable 1', targetFid: () => OBJSTRAT.threeYearMeas[0],
+      ask: "THREE-YEAR MEASURABLE 1 — one numeric KPI.\n\nJust the number and what it measures. E.g. '£15k/month net profit', '95% occupancy', '5 equity partnerships'. I'll write up the full target + how-to-measure." },
+    { id: 'threeYearM2', label: 'Three-Year Measurable 2', targetFid: () => OBJSTRAT.threeYearMeas[1],
+      ask: "THREE-YEAR MEASURABLE 2 — a DIFFERENT dimension to M1.\n\nIf M1 was money, make this systems/ops. Just the number and what it is." },
+    { id: 'threeYearM3', label: 'Three-Year Measurable 3', targetFid: () => OBJSTRAT.threeYearMeas[2],
+      ask: "THREE-YEAR MEASURABLE 3 — optional. Say 'skip' if you've got nothing distinct to add." },
+    { id: 'oneYear', label: 'One-Year Target', targetFid: () => OBJSTRAT.oneYearTarget,
+      ask: "ONE-YEAR TARGET — what the business looks like in 12 months.\n\nA few numbers and direction — income, progress towards 3-year, what systems are live. I'll write it up as a proper stepping-stone target." },
+    { id: 'oneYearM1', label: 'One-Year Measurable 1', targetFid: () => OBJSTRAT.oneYearMeas[0],
+      ask: "ONE-YEAR MEASURABLE 1 — one number, tracked monthly.\n\nJust the KPI and the number. E.g. '£5k/month income from Operations Director'." },
+    { id: 'oneYearM2', label: 'One-Year Measurable 2', targetFid: () => OBJSTRAT.oneYearMeas[1],
+      ask: "ONE-YEAR MEASURABLE 2 — a different dimension. One number + what it is." },
+    { id: 'oneYearM3', label: 'One-Year Measurable 3', targetFid: () => OBJSTRAT.oneYearMeas[2],
+      ask: "ONE-YEAR MEASURABLE 3 — optional. Say 'skip' if nothing distinct." },
+    { id: 'qp1', label: 'Quarterly Project 1', targetFid: () => OBJSTRAT.quarterlyProjects[0],
+      ask: "QUARTERLY PROJECT 1 — the #1 most important 90-day project.\n\nJust the project name + a word or two on the focus. I'll write up the full brief — deliverable, scope, success criteria — based on what you've said about the rest of the plan." },
+    { id: 'qp1det', label: 'QP1 — KPI / Tracking / Definition of Done', kind: 'projectDetails', qpIndex: 0,
+      ask: "QP1 — the metrics.\n\nJust the rough KPI and what 'done' looks like. E.g. 'DOD v2 complete, deployed to one client' or 'occupancy 95%'. I'll structure it into KPI name, unit, tracking method, and a full definition of done." },
+    { id: 'qp1m1', label: 'QP1 — Month 1', targetFid: () => OBJSTRAT.monthlyStones[0][0],
+      ask: "QP1 — Month 1 stepping stone.\n\nJust a word or two on what's tangibly done by end of month 1. I'll write the deliverable." },
+    { id: 'qp1m2', label: 'QP1 — Month 2', targetFid: () => OBJSTRAT.monthlyStones[0][1],
+      ask: "QP1 — Month 2 stepping stone.\n\nWhat's done by end of month 2?" },
+    { id: 'qp1m3', label: 'QP1 — Month 3', targetFid: () => OBJSTRAT.monthlyStones[0][2],
+      ask: "QP1 — Month 3 stepping stone (project complete state).\n\nWhat does 'done' look like?" },
+    { id: 'qp2', label: 'Quarterly Project 2', targetFid: () => OBJSTRAT.quarterlyProjects[1],
+      ask: "QUARTERLY PROJECT 2 — different dimension to QP1.\n\nJust the name + a word on focus. I'll write up the full brief." },
+    { id: 'qp2det', label: 'QP2 — KPI / Tracking / Definition of Done', kind: 'projectDetails', qpIndex: 1,
+      ask: "QP2 — the metrics. Rough KPI + what 'done' looks like. I'll structure the rest." },
+    { id: 'qp2m1', label: 'QP2 — Month 1', targetFid: () => OBJSTRAT.monthlyStones[1][0],
+      ask: "QP2 — Month 1 stepping stone. A word or two." },
+    { id: 'qp2m2', label: 'QP2 — Month 2', targetFid: () => OBJSTRAT.monthlyStones[1][1],
+      ask: "QP2 — Month 2 stepping stone." },
+    { id: 'qp2m3', label: 'QP2 — Month 3', targetFid: () => OBJSTRAT.monthlyStones[1][2],
+      ask: "QP2 — Month 3 stepping stone (project complete)." },
+    { id: 'qp3', label: 'Quarterly Project 3', targetFid: () => OBJSTRAT.quarterlyProjects[2],
+      ask: "QUARTERLY PROJECT 3 — optional. Say 'skip' if you'd rather only run two.\n\nOtherwise just the name + focus." },
+    { id: 'qp3det', label: 'QP3 — KPI / Tracking / Definition of Done', kind: 'projectDetails', qpIndex: 2,
+      ask: "QP3 — the metrics. Skip if no QP3. Otherwise rough KPI + 'done' state." },
+    { id: 'qp3m1', label: 'QP3 — Month 1', targetFid: () => OBJSTRAT.monthlyStones[2][0],
+      ask: "QP3 — Month 1 stepping stone. Skip if no QP3." },
+    { id: 'qp3m2', label: 'QP3 — Month 2', targetFid: () => OBJSTRAT.monthlyStones[2][1],
+      ask: "QP3 — Month 2 stepping stone." },
+    { id: 'qp3m3', label: 'QP3 — Month 3', targetFid: () => OBJSTRAT.monthlyStones[2][2],
+      ask: "QP3 — Month 3 stepping stone." },
+];
+
+// Max number of pushbacks the mentor is allowed per step before auto-accepting.
+// Set to 1 by design — the wizard's job is to produce 90% output from 10%
+// input, not interrogate the founder. Push back only when there is zero
+// substance to work with.
+const MAX_PUSHBACKS_PER_STEP = 1;
+
+// localStorage key for a wizard session, scoped to business × quarter × year.
+function wizSessionKey() {
+    const { businessId, quarter, year } = getSelection();
+    return `ostrat:wizard:${businessId}:${quarter}:${year}`;
+}
+
+// Save everything we'd need to resume a wizard — but NOT the DOM elements or
+// the full Airtable prior record (we re-fetch that on resume).
+// We save the current step's ID (not its numeric index) so resumes stay
+// correct even if the WIZARD_STEPS array changes order or gains/loses steps
+// between sessions.
+function persistWizardState() {
+    if (!wizardState) return;
+    try {
+        const currentId = WIZARD_STEPS[wizardState.stepIndex]?.id || null;
+        localStorage.setItem(wizSessionKey(), JSON.stringify({
+            stepId: currentId,
+            answers: wizardState.answers,
+            reflection: wizardState.reflection || '',
+            pushbackCount: wizardState.pushbackCount,
+            stepHistory: wizardState.stepHistory,
+            visibleMessages: wizardState.visibleMessages || [],
+            focusStepId: wizardState.focusStepId || null,
+            savedAt: Date.now(),
+        }));
+    } catch (e) { /* quota or disabled */ }
+}
+
+function clearWizardSession() {
+    try { localStorage.removeItem(wizSessionKey()); } catch (e) {/* best-effort: safe fallback */}
+}
+
+function openWizard(opts = {}) {
+    const { businessId, quarter, year } = getSelection();
+    if (!businessId || !quarter || !year) {
+        setStatus('warn', 'Pick a business, quarter and year first.');
+        return;
+    }
+    // Spot-edit: { focusStepId } jumps the wizard straight to one step.
+    const focusStepId = opts.focusStepId || null;
+
+    // A founder's instinct is to open last quarter and run the wizard from
+    // there. That used to rewrite the finished quarter silently, because the
+    // wizard writes into whatever record is loaded. Warn, and point at the
+    // quarter they almost certainly meant.
+    //
+    // Not for a spot-edit: clicking "✨ Revise" on one field of a historic
+    // record is a deliberate single-field edit, so telling them to go and
+    // select a different quarter would be wrong.
+    if (!focusStepId && currentRecord && isPastQuarter(quarter, year)) {
+        const cur = currentQuarterYear();
+        const ok = confirm(
+            `${quarter} ${year} is a past quarter and already has a saved plan.\n\n` +
+            `Running the wizard here will rewrite it.\n\n` +
+            `To plan the new quarter, close this and select ${cur.quarter} ${cur.year} instead. ` +
+            `The wizard reads ${quarter} ${year} for you automatically and uses it for reflection.\n\n` +
+            `Continue editing ${quarter} ${year} anyway?`
+        );
+        if (!ok) return;
+    }
+
+    // The wizard writes its answers into form fields, so there has to be a form.
+    // Opening from the empty state leaves one only when a prior quarter exists
+    // to pre-fill from. A brand-new business has none, and the prior-quarter
+    // fetch can fail silently, so guarantee a blank form up front rather than
+    // letting the wizard type into nothing.
+    if (!document.querySelector('.plan-form [data-field-id]')) {
+        renderForm({});
+        toggleAllSections(true);
+    }
+
+    // Try to resume a saved session for this business/quarter/year.
+    let saved = null;
+    try {
+        const raw = localStorage.getItem(wizSessionKey());
+        if (raw) saved = JSON.parse(raw);
+    } catch (e) {/* best-effort: safe fallback */}
+
+    wizardState = {
+        stepIndex: 0,
+        answers: saved?.answers || {},
+        priorRecord: null,
+        businessName: allBusinessesLocal.find(b => b.id === businessId)?.name || '',
+        stepHistory: [],
+        pushbackCount: 0,
+        reflection: saved?.reflection || '',
+        visibleMessages: [],
+        focusStepId,
+    };
+
+    document.getElementById('wizardPanel').style.display = 'flex';
+    document.querySelector('.layout').classList.add('with-wizard');
+    document.getElementById('wizMessages').innerHTML = '';
+
+    if (focusStepId) {
+        // Spot-edit — jump to one step only.
+        const idx = WIZARD_STEPS.findIndex(s => s.id === focusStepId);
+        wizardState.stepIndex = idx >= 0 ? idx : 0;
+        appendWizMessage('system', `Spot-edit mode — working on a single question. Hit ✕ when done.`);
+        loadPriorQuarter().then(() => askCurrentStep());
+        return;
+    }
+
+    if (saved && saved.visibleMessages?.length && (saved.stepId || typeof saved.stepIndex === 'number')) {
+        // Resume — replay messages and pick up where we left off.
+        // Prefer stepId (resilient to array changes); fall back to stepIndex
+        // for older sessions persisted before the stepId field existed.
+        let resumeIndex = 0;
+        if (saved.stepId) {
+            const idx = WIZARD_STEPS.findIndex(s => s.id === saved.stepId);
+            resumeIndex = idx >= 0 ? idx : 0;
+        } else if (typeof saved.stepIndex === 'number') {
+            resumeIndex = Math.min(saved.stepIndex, WIZARD_STEPS.length - 1);
+        }
+        wizardState.stepIndex = resumeIndex;
+        wizardState.stepHistory = saved.stepHistory || [];
+        wizardState.pushbackCount = saved.pushbackCount || 0;
+        saved.visibleMessages.forEach(m => appendWizMessage(m.role, m.content, { skipPersist: true }));
+        const currLabel = WIZARD_STEPS[resumeIndex]?.label || 'end';
+        appendWizMessage('system', `↻ Resumed from ${new Date(saved.savedAt).toLocaleTimeString()}. Step ${resumeIndex + 1}/${WIZARD_STEPS.length} · ${currLabel}. Reset session? Click 'Start over' below.`);
+        addResetButton();
+        loadPriorQuarter();
+        return;
+    }
+
+    // Fresh wizard.
+    appendWizMessage('system', "Boardroom Mentor here. Think of me as a strategic consultant — you give me 10% (a few words, rough bullets, key numbers) and I write the other 90% in the form. I won't interrogate you. Preview → approve → done. Use '← Back' to revise, 'Move on →' to skip, ✕ to close.");
+    loadPriorQuarter().then(() => askCurrentStep());
+}
+
+function addResetButton() {
+    // Add a one-shot "Start over" action under the last system message.
+    const host = document.getElementById('wizMessages');
+    const btn = document.createElement('button');
+    btn.className = 'btn btn-ghost';
+    btn.style.cssText = 'align-self:center;font-size:11px;padding:4px 10px';
+    btn.textContent = 'Start over';
+    btn.onclick = () => {
+        if (!confirm('Discard the current session and start the wizard from scratch?')) return;
+        clearWizardSession();
+        closeWizard();
+        setTimeout(() => openWizard(), 50);
+    };
+    host.appendChild(btn);
+    host.scrollTop = host.scrollHeight;
+}
+
+async function loadPriorQuarter() {
+    const { businessId, quarter, year } = getSelection();
+    const qIdx = QUARTERS.indexOf(quarter);
+    const priorQ = qIdx > 0 ? QUARTERS[qIdx - 1] : 'Q4';
+    const priorY = qIdx > 0 ? year : String(parseInt(year, 10) - 1);
+    try {
+        const business = allBusinessesLocal.find(b => b.id === businessId);
+        const businessName = (business?.name || '').replace(/"/g, '\\"');
+        const params = new URLSearchParams({
+            filterByFormula: `AND({Business Name} = "${businessName}", {Quarter} = "${priorQ}", {Year} = "${priorY}")`,
+            maxRecords: '1',
+            returnFieldsByFieldId: 'true',
+        });
+        const data = await airtableFetch(`${TABLES.objStrat}?${params.toString()}`);
+        if (data.records.length) {
+            wizardState.priorRecord = data.records[0];
+            appendWizMessage('system', `Prior quarter loaded: ${priorQ} ${priorY}. I will reference it where useful.`);
+
+            // If no record exists for the current quarter yet, pre-fill the form
+            // with the prior quarter's values so the user can iterate on them
+            // rather than starting blank.
+            //
+            // Skip the pre-fill if the form is already dirty: the founder has
+            // started typing their own plan via "Fill in manually" and then
+            // opened the wizard for help. renderForm() replaces the whole form,
+            // so pre-filling here would wipe their words without warning.
+            if (!currentRecord && isDirty) {
+                appendWizMessage('system', `You've already started typing this plan, so I've left your work alone rather than overwriting it with ${priorQ} ${priorY}. I'll still use ${priorQ} ${priorY} for reflection, and each answer you give me updates its own field.`);
+            } else if (!currentRecord) {
+                const priorFields = wizardState.priorRecord.fields || {};
+                renderForm(priorFields);
+                // Deliberately NOT markDirty(). A pre-fill is last quarter's
+                // work, not this quarter's, and Save used to go live the
+                // instant the wizard opened — one click from a Q3 that is a
+                // verbatim copy of Q2 and reads back as a finished plan.
+                //
+                // This defers Save until the founder has actually engaged:
+                // answered a step, edited a field, or walked the wizard to the
+                // end (see finaliseWizard). It does NOT prevent a deliberate
+                // clone — skipping every step still carries the prior quarter
+                // over — it only stops an accidental one.
+                appendWizMessage('system', `Form pre-filled from ${priorQ} ${priorY} as a starting point — nothing is saved yet. I'll walk through each section so we can iterate. 'Save changes' unlocks once you've answered or changed something.`);
+            }
+        } else {
+            appendWizMessage('system', `No prior quarter found (${priorQ} ${priorY}). Starting fresh.`);
+        }
+    } catch (e) { /* silent */ }
+}
+
+function closeWizard(opts = {}) {
+    if (!wizardState) { hideWizardUI(); return; }
+    // Closing always keeps the session in localStorage — reopen picks up
+    // exactly where we left off. Pass keepSession:false to fully reset.
+    if (opts.keepSession === false) clearWizardSession();
+    wizardState = null;
+    hideWizardUI();
+}
+
+function hideWizardUI() {
+    document.getElementById('wizardPanel').style.display = 'none';
+    document.querySelector('.layout').classList.remove('with-wizard');
+}
+
+function currentStep() {
+    if (!wizardState) return null;
+    const step = WIZARD_STEPS[wizardState.stepIndex];
+    if (step && step.needsPrior && !wizardState.priorRecord) {
+        wizardState.stepIndex++;
+        return currentStep();
+    }
+    return step;
+}
+
+function askCurrentStep() {
+    const step = currentStep();
+    document.getElementById('wizStepLabel').textContent = step ? `Step ${wizardState.stepIndex + 1} of ${WIZARD_STEPS.length} · ${step.label}` : 'Complete';
+    if (!step) return finaliseWizard();
+    // Reset per-step critique history — new step starts with no memory of the old one.
+    wizardState.stepHistory = [];
+    wizardState.pushbackCount = 0;
+    appendWizMessage('assistant', step.ask);
+
+    // List step: show the current list so the user can reference it when asking
+    // for changes. Falls through to the generic "Currently:" block below for
+    // single-field steps.
+    if (step.kind === 'list') {
+        const fids = step.fieldIdsFn();
+        const items = fids.map(fid => currentValueForField(fid)).filter(v => v && v.trim());
+        if (items.length) {
+            const preview = items.map((t, i) => `${i + 1}. ${t.split('\n')[0]}`).join('\n');
+            appendWizMessage('system', `Current list (${items.length} of ${step.maxItems}):\n\n${preview}\n\nType the changes you want, or 'no changes' / 'Move on →' to keep as-is.`);
+        } else {
+            appendWizMessage('system', `Nothing set yet. List them out and I'll structure them into the ${step.maxItems}-slot format.`);
+        }
+        return;
+    }
+
+    // Single-field step: show the current/prior value inline so the user can
+    // iterate rather than retype.
+    if (step.targetFid) {
+        const fid = step.targetFid();
+        const existing = currentValueForField(fid);
+        if (existing) {
+            appendWizMessage('system', `Currently:\n\n${existing}\n\nType your iteration, or press 'Move on →' to keep as-is.`);
+        }
+    }
+}
+
+function currentValueForField(fid) {
+    // Prefer whatever is in the form (may have been pre-filled from prior quarter)
+    const el = document.querySelector(`[data-field-id="${fid}"]`);
+    if (el && el.value && el.value.trim()) return el.value.trim();
+    // Fall back to prior record
+    const f = wizardState?.priorRecord?.fields || {};
+    const v = f[fid];
+    return (v && typeof v === 'string' && v.trim()) ? v.trim() : '';
+}
+
+async function wizSend() {
+    const ta = document.getElementById('wizInput');
+    const text = ta.value.trim();
+    if (!text || !wizardState) return;
+    ta.value = '';
+    const step = currentStep();
+    if (!step) return;
+    appendWizMessage('user', text);
+    wizardState.stepHistory.push({ role: 'user', content: text });
+
+    // List step — special handling: AI produces a whole new list based on the
+    // current list + the user's change instruction.
+    if (step.kind === 'list') {
+        await handleListStep(step, text);
+        return;
+    }
+
+    // Project-details step — one bulk question that captures KPI name, unit,
+    // tracking method and definition of done. AI parses the free-form answer
+    // into structured JSON and writes to the four Airtable fields.
+    if (step.kind === 'projectDetails') {
+        await handleProjectDetailsStep(step, text);
+        return;
+    }
+
+    // Reflection / discovery steps have no target field — they're just context
+    // gathering for the mentor. Accept without critique so the user can move on.
+    if (!step.targetFid) {
+        wizardState.answers[step.id] = text;
+        // Reflection feeds later steps: store it on the wizard state so every
+        // subsequent critique call includes it as context. This is how "what
+        // missed last quarter" actually shapes "this quarter's measurables."
+        if (step.id === 'reflection') wizardState.reflection = text;
+        appendWizMessage('assistant', 'Noted — I\'ll refer back to this as we work through the rest of the sections.');
+        wizardState.stepIndex++;
+        askCurrentStep();
+        return;
+    }
+
+    // If we've already pushed back MAX times, auto-accept so we don't loop.
+    if (wizardState.pushbackCount >= MAX_PUSHBACKS_PER_STEP) {
+        wizardState.answers[step.id] = text;
+        appendWizMessage('assistant', 'Accepted — moving on. You can sharpen this in the form later if you want.');
+        applyOrAskToMerge(step, text);
+        return;
+    }
+
+    // Let Boardroom Mentor critique it, with the full step history so it can
+    // see what has already been asked and answered and not repeat itself.
+    const critique = await boardroomCritique(step, wizardState.stepHistory);
+    if (critique && critique.accept === false) {
+        wizardState.pushbackCount++;
+        const pushback = critique.pushback || 'Can you be more specific?';
+        wizardState.stepHistory.push({ role: 'assistant', content: pushback });
+        const remaining = MAX_PUSHBACKS_PER_STEP - wizardState.pushbackCount;
+        const tail = remaining > 0
+            ? `\n\n(${remaining} more push-back before I auto-accept. Hit 'Move on →' any time to skip.)`
+            : "\n\n(I'll accept your next answer as-is and move on.)";
+        appendWizMessage('assistant', pushback + tail);
+        return;
+    }
+    // Accept
+    const accepted = critique?.refined || text;
+    wizardState.answers[step.id] = accepted;
+    if (critique?.note) appendWizMessage('assistant', critique.note);
+    applyOrAskToMerge(step, accepted);
+}
+
+// After an accepted answer we show a preview of the AI-refined text and let
+// the founder approve, tweak, or write their own. Only after approval does
+// it actually get written to the form.
+// • Empty field: show approval preview, then apply on Use.
+// • Non-empty field: show merge picker (Replace / Add / Amend with AI).
+function applyOrAskToMerge(step, newText) {
+    if (!step.targetFid) {
+        advanceStep();
+        return;
+    }
+    const fid = step.targetFid();
+    const existing = currentValueForField(fid);
+    const newTrim = (newText || '').trim();
+    const existingTrim = (existing || '').trim();
+    // Non-empty (and not identical) → merge picker
+    if (existingTrim && existingTrim !== newTrim) {
+        showMergePicker(step, newText, existing);
+        return;
+    }
+    // Empty field → show approval preview so the founder can approve / tweak
+    // the AI-expanded version before it populates the form.
+    showApprovalPreview(step, newText);
+}
+
+function showApprovalPreview(step, proposedText) {
+    const host = document.getElementById('wizMessages');
+    const wrap = document.createElement('div');
+    wrap.className = 'msg system approval-preview';
+    const label = 'Here\'s what I\'d write into the form:';
+    wrap.innerHTML = `<div style="font-weight:600;color:var(--text-primary);margin-bottom:6px">${escapeHtml(label)}</div>
+        <div style="white-space:pre-wrap;background:var(--bg-surface);border:1px solid var(--border-subtle);border-radius:6px;padding:10px 12px;margin-bottom:8px;font-size:13px;line-height:1.55">${escapeHtml(proposedText)}</div>`;
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
+    const mk = (label, handler) => {
+        const b = document.createElement('button');
+        b.className = 'btn btn-ghost';
+        b.style.cssText = 'font-size:11px;padding:4px 10px';
+        b.textContent = label;
+        b.onclick = handler;
+        return b;
+    };
+    btnRow.appendChild(mk('Use this', () => {
+        const fid = step.targetFid();
+        applyFieldValueInUI(fid, proposedText);
+        wizardState.answers[step.id] = proposedText;
+        advanceStep();
+    }));
+    btnRow.appendChild(mk('Tweak it', () => {
+        appendWizMessage('assistant', "OK — tell me what to change. I'll redo it.");
+        // stepIndex stays put; user's next Send triggers another critique/refine
+    }));
+    btnRow.appendChild(mk('I\'ll write it myself', () => {
+        const ta = document.getElementById('wizInput');
+        ta.value = proposedText;
+        ta.focus();
+        appendWizMessage('assistant', "Edit in the input box and hit Send when you're happy. I'll accept it as-is.");
+    }));
+    wrap.appendChild(btnRow);
+    host.appendChild(wrap);
+    host.scrollTop = host.scrollHeight;
+    if (wizardState) {
+        (wizardState.visibleMessages = wizardState.visibleMessages || []).push({
+            role: 'system', content: '[Approval preview] ' + proposedText + ' (Use / Tweak / Write own)'
+        });
+        persistWizardState();
+    }
+}
+
+function advanceStep() {
+    if (wizardState.focusStepId) { closeWizard({ keepSession: false }); return; }
+    wizardState.stepIndex++;
+    askCurrentStep();
+    persistWizardState();
+}
+
+function showMergePicker(step, newText, existingText) {
+    const host = document.getElementById('wizMessages');
+    const wrap = document.createElement('div');
+    wrap.className = 'msg system merge-picker';
+    wrap.innerHTML = `<div style="font-weight:600;color:var(--text-primary);margin-bottom:6px">The field already has content — how should your answer be applied?</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-bottom:8px;line-height:1.5">
+        <strong>Replace</strong> · Discard the existing text. AI writes your answer as the new value.<br>
+        <strong>Add</strong> · Keep the existing text. AI smooths your answer in as a clean addition (no duplicated facts).<br>
+        <strong>Amend with AI</strong> · Treat your answer as an instruction ("change 20k to 15k", "tighten this", "add a line about X") and let AI apply it to the existing text.</div>`;
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:6px;flex-wrap:wrap';
+    const mk = (label, handler) => {
+        const b = document.createElement('button');
+        b.className = 'btn btn-ghost';
+        b.style.cssText = 'font-size:11px;padding:4px 10px';
+        b.textContent = label;
+        b.onclick = handler;
+        return b;
+    };
+    btnRow.appendChild(mk('Replace', () => resolveMerge(step, newText)));
+    btnRow.appendChild(mk('Add', async () => {
+        btnRow.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        const merged = await aiAddContent(existingText, newText, step);
+        resolveMerge(step, merged);
+    }));
+    btnRow.appendChild(mk('Amend with AI', async () => {
+        btnRow.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        const merged = await aiMerge(existingText, newText, step);
+        resolveMerge(step, merged);
+    }));
+    wrap.appendChild(btnRow);
+    host.appendChild(wrap);
+    host.scrollTop = host.scrollHeight;
+    // Persist so a refresh mid-pick doesn't leave the wizard in a weird state —
+    // the visible message log will replay the picker on resume.
+    if (wizardState) {
+        (wizardState.visibleMessages = wizardState.visibleMessages || []).push({
+            role: 'system', content: '(merge picker — Replace / Add / Amend with AI was shown)'
+        });
+        persistWizardState();
+    }
+}
+
+function resolveMerge(step, finalText) {
+    if (!wizardState) return;
+    const fid = step.targetFid();
+    applyFieldValueInUI(fid, finalText);
+    wizardState.answers[step.id] = finalText;
+    advanceStep();
+}
+
+// Handle a project-details wizard step — one question captures KPI name,
+// KPI unit, tracking method, definition of done. AI parses the free-form
+// answer into structured JSON and writes to the four target fields.
+async function handleProjectDetailsStep(step, answer) {
+    const det = OBJSTRAT.qpDetails[step.qpIndex];
+    if (/^(skip|none|pass|no)$/i.test(answer.trim())) {
+        appendWizMessage('assistant', 'Skipping project details.');
+        advanceStep();
+        return;
+    }
+    appendWizMessage('assistant', 'Structuring…');
+    const parsed = await boardroomParseProjectDetails(step, answer);
+    if (!parsed) {
+        appendWizMessage('assistant', "I couldn't structure that cleanly. Moving on — you can edit the KPI / Tracking / DoD inline in the form.");
+        advanceStep();
+        return;
+    }
+    const prev = {
+        kpiName: currentValueForField(det.kpiName),
+        kpiUnit: extractSelectName(document.querySelector(`[data-field-id="${det.kpiUnit}"]`)?.value) || '',
+        tracking: currentValueForField(det.tracking),
+        dod: currentValueForField(det.dod),
+    };
+    showProjectDetailsPreview(step, parsed, prev);
+}
+
+function showProjectDetailsPreview(step, parsed, previous) {
+    const det = OBJSTRAT.qpDetails[step.qpIndex];
+    const host = document.getElementById('wizMessages');
+    const wrap = document.createElement('div');
+    wrap.className = 'msg system';
+    const preview = `Proposed for Project ${step.qpIndex + 1}:\n\n• KPI: ${parsed.kpiName || '—'}${parsed.kpiUnit ? ' (' + parsed.kpiUnit + ')' : ''}${parsed.kpiTarget ? ' · target ' + parsed.kpiTarget : ''}\n• Tracking: ${parsed.trackingMethod || '—'}\n• Definition of Done: ${parsed.definitionOfDone || '—'}`;
+    wrap.textContent = preview;
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:6px;margin-top:8px;flex-wrap:wrap';
+    const mk = (label, handler) => {
+        const b = document.createElement('button');
+        b.className = 'btn btn-ghost';
+        b.style.cssText = 'font-size:11px;padding:4px 10px';
+        b.textContent = label;
+        b.onclick = handler;
+        return b;
+    };
+    btnRow.appendChild(mk('Apply', () => {
+        applyFieldValueInUI(det.kpiName, parsed.kpiName || '');
+        const unitEl = document.querySelector(`[data-field-id="${det.kpiUnit}"]`);
+        if (unitEl) { unitEl.value = parsed.kpiUnit || ''; markDirty(); }
+        applyFieldValueInUI(det.tracking, parsed.trackingMethod || '');
+        applyFieldValueInUI(det.dod, parsed.definitionOfDone || '');
+        appendWizMessage('assistant', 'Applied.');
+        advanceStep();
+    }));
+    btnRow.appendChild(mk('Revise', () => {
+        appendWizMessage('assistant', 'OK — tell me what to change and I\'ll rework it.');
+    }));
+    btnRow.appendChild(mk('Keep existing', () => {
+        appendWizMessage('assistant', 'No changes applied.');
+        advanceStep();
+    }));
+    wrap.appendChild(btnRow);
+    host.appendChild(wrap);
+    host.scrollTop = host.scrollHeight;
+    if (wizardState) {
+        (wizardState.visibleMessages = wizardState.visibleMessages || []).push({ role: 'system', content: preview + ' (pending choice)' });
+        persistWizardState();
+    }
+}
+
+async function boardroomParseProjectDetails(step, answer) {
+    const system = buildCachedWizardSystem(
+        `Strategy Plan — ${wizardState.businessName}. Parsing Project ${step.qpIndex + 1} metadata.`,
+        `Parse the founder's answer into structured project metadata.
+
+Return a JSON object ONLY — no commentary, no code fence:
+{
+  "kpiName": "short KPI name (e.g. 'Monthly recurring revenue')",
+  "kpiUnit": one of: "£", "%", "count", "days", "items", "hours" — pick the best match, or "" if none fits,
+  "kpiTarget": "optional — a specific numeric target mentioned, as a number. Omit if not given.",
+  "trackingMethod": "how it's tracked: source, frequency, owner — tidy the founder's wording, UK English",
+  "definitionOfDone": "the end state that means the project is done — tidy the founder's wording, UK English"
+}
+
+Rules:
+- Preserve every specific number, name, and claim the founder gave.
+- Tidy for grammar/flow. UK English.
+- If a field isn't addressed in the answer, return an empty string for it (not null).`
+    );
+    try {
+        const res = await fetch(AI_PROXY, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: AI_MODEL_DEFAULT,
+                max_tokens: 1500,
+                system,
+                messages: [{ role: 'user', content: answer }],
+            }),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        const raw = (data.content?.[0]?.text || '').trim();
+        const match = raw.match(/\{[\s\S]*\}/);
+        if (!match) return null;
+        return JSON.parse(match[0]);
+    } catch (e) { return null; }
+}
+
+// Handle a list-kind wizard step — ask Claude to produce the full new list
+// based on the current list + the founder's change instruction, show it as
+// a preview, and commit to all slots on confirmation.
+async function handleListStep(step, instruction) {
+    const fids = step.fieldIdsFn();
+    const current = fids.map(fid => currentValueForField(fid) || '');
+    const currentNonEmpty = current.filter(v => v.trim());
+
+    // If user says "no changes" / "skip" / similar, just advance without AI call.
+    if (/^(no changes?|none|skip|keep|same|pass|all good)$/i.test(instruction.trim())) {
+        appendWizMessage('assistant', 'Noted — no changes. Moving on.');
+        advanceStep();
+        return;
+    }
+
+    appendWizMessage('assistant', 'Restructuring the list… one moment.');
+    const newList = await boardroomListRewrite(step, currentNonEmpty, instruction);
+    if (!newList || !newList.length) {
+        appendWizMessage('assistant', "I didn't get a clean list back. Keeping the current list and moving on — you can edit inline in the form.");
+        advanceStep();
+        return;
+    }
+
+    // Preview + confirm before writing all slots.
+    showListPreview(step, newList, current);
+}
+
+function showListPreview(step, newList, previous) {
+    const host = document.getElementById('wizMessages');
+    const wrap = document.createElement('div');
+    wrap.className = 'msg system';
+    const preview = newList.map((t, i) => `${i + 1}. ${t.split('\n')[0]}`).join('\n');
+    const text = `Proposed new list (${newList.length} item${newList.length === 1 ? '' : 's'}):\n\n${preview}\n\nApply to the form?`;
+    wrap.textContent = text;
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:6px;margin-top:8px;flex-wrap:wrap';
+    const mk = (label, handler) => {
+        const b = document.createElement('button');
+        b.className = 'btn btn-ghost';
+        b.style.cssText = 'font-size:11px;padding:4px 10px';
+        b.textContent = label;
+        b.onclick = handler;
+        return b;
+    };
+    btnRow.appendChild(mk('Apply (replace)', () => applyListAndAdvance(step, newList)));
+    btnRow.appendChild(mk('Revise', () => {
+        appendWizMessage('assistant', 'OK — tell me what to change and I\'ll rework it.');
+    }));
+    btnRow.appendChild(mk('Keep existing', () => {
+        appendWizMessage('assistant', 'No changes applied. Moving on.');
+        advanceStep();
+    }));
+    wrap.appendChild(btnRow);
+    host.appendChild(wrap);
+    host.scrollTop = host.scrollHeight;
+    // Track the preview in the visible log.
+    if (wizardState) {
+        (wizardState.visibleMessages = wizardState.visibleMessages || []).push({ role: 'system', content: text + ' (pending choice)' });
+        persistWizardState();
+    }
+}
+
+function applyListAndAdvance(step, list) {
+    const fids = step.fieldIdsFn();
+    const sized = list.slice(0, step.maxItems);
+    fids.forEach((fid, i) => applyFieldValueInUI(fid, sized[i] || ''));
+    appendWizMessage('assistant', `Applied ${sized.length} item${sized.length === 1 ? '' : 's'} to the form.`);
+    advanceStep();
+}
+
+async function boardroomListRewrite(step, currentList, instruction) {
+    const system = buildCachedWizardSystem(
+        `Strategy Plan — ${wizardState.businessName}. Restructuring a list field.`,
+        `You are restructuring the "${step.label}" list for the business.
+
+Context: ${step.descriptionForAI || ''}
+Maximum items allowed: ${step.maxItems}
+
+Current list (JSON array, may be empty):
+${JSON.stringify(currentList)}
+
+Founder's change instruction (their own words):
+"${instruction}"
+
+Your task: return a JSON object {"list": ["item 1", "item 2", ...]} representing the FINAL list after applying the founder's instruction. Rules:
+- If the founder listed new items directly (first-time use), structure them into the list.
+- If they said "add", "reword", "remove", or similar, apply those edits to the current list.
+- If they gave a full new list, replace.
+- Preserve all substance from the current list that wasn't explicitly changed.
+- Tidy each item for grammar, punctuation, UK English, while keeping the founder's voice.
+- Each item can be a single sentence OR a title followed by bullets — preserve structure if the current list has structure.
+- Never exceed ${step.maxItems} items.
+
+Return the JSON object ONLY. No commentary. No code fence.`
+    );
+    try {
+        const res = await fetch(AI_PROXY, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: AI_MODEL_DEFAULT,
+                max_tokens: 3000,
+                system,
+                messages: [{ role: 'user', content: 'Return the restructured list now.' }],
+            }),
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        const raw = (data.content?.[0]?.text || '').trim();
+        const match = raw.match(/\{[\s\S]*\}/);
+        if (!match) return null;
+        const parsed = JSON.parse(match[0]);
+        return Array.isArray(parsed.list) ? parsed.list.map(String) : null;
+    } catch (e) { return null; }
+}
+
+// ADD mode — keep the existing content intact, append the founder's new
+// content so it flows naturally. AI only cleans up the seam and tidies
+// grammar; it does NOT modify the existing content and does NOT treat the
+// input as an instruction.
+async function aiAddContent(existing, addition, step) {
+    const system = buildCachedWizardSystem(
+        `Strategy Plan — ${wizardState.businessName}. Appending new content to an existing field.`,
+        `The founder has EXISTING text for "${step.label}" and NEW content they want added to it.
+
+Your job: return the full final text with the new content appended naturally.
+
+RULES:
+- Keep every word of the existing text UNCHANGED. Do not rephrase, condense, or edit it.
+- Append the new content beneath it. Add a blank line, a transition phrase, or a new bullet if that fits the structure; otherwise just a paragraph break.
+- Tidy only the new content for grammar and UK English. Do not touch the existing text.
+- Avoid duplicating facts already stated in the existing text — if the new content repeats a point verbatim, drop the duplicate.
+- Match the structure of the existing text: if it's bulleted, add as a new bullet; if paragraphs, add as a new paragraph.
+- Return the full final text ONLY. No explanation. No quotes. No markdown code fences.`
+    );
+    try {
+        const res = await fetch(AI_PROXY, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: AI_MODEL_DEFAULT,
+                max_tokens: 2000,
+                system,
+                messages: [
+                    { role: 'user', content: `EXISTING TEXT (keep exactly as-is):\n"""\n${existing}\n"""\n\nNEW CONTENT TO ADD (tidy and append):\n"""\n${addition}\n"""\n\nReturn the full final text only.` },
+                ],
+            }),
+        });
+        if (!res.ok) return existing.trimEnd() + '\n\n' + addition;
+        const data = await res.json();
+        let out = (data.content?.[0]?.text || '').trim();
+        out = out.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/, '');
+        out = out.replace(/^"""\n?|\n?"""$/g, '');
+        return out || (existing.trimEnd() + '\n\n' + addition);
+    } catch (e) { return existing.trimEnd() + '\n\n' + addition; }
+}
+
+async function aiMerge(existing, userInput, step) {
+    const system = buildCachedWizardSystem(
+        `Strategy Plan — ${wizardState.businessName}. Applying a founder's instruction to an existing field.`,
+        `You have the EXISTING text for "${step.label}" and an INSTRUCTION from the founder. Your job is to return the full UPDATED text after applying the instruction.
+
+The instruction may be one of these kinds — figure out which before responding:
+
+1. EDIT — the founder wants a specific change to the existing text. Examples:
+   - "change 20–25k to 15–20k"
+   - "replace HMOs with serviced accommodation"
+   - "remove the bit about AI agents"
+   - "tighten the third paragraph"
+   → Apply the change to the existing text. Change ONLY what was requested. Everything else stays identical.
+
+2. ADDITION — the founder is adding a new sentence, bullet, or idea. Examples:
+   - "also include that we're expanding to Scotland"
+   - "add a line about equity partnerships"
+   → Incorporate it where it fits naturally. Do not rewrite surrounding material.
+
+3. REWRITE — the founder wants the whole thing recast. Examples:
+   - "make it punchier"
+   - "rewrite this in first person"
+   - "shorten to 3 bullets"
+   → Rewrite accordingly, preserving every number, name, and claim.
+
+RULES:
+- Return the full final text of the field. Not a diff. Not a "before/after". Not an explanation. Not JSON. Just the text.
+- UK English. Clean grammar and punctuation.
+- Preserve every specific number, date, and name that the founder did NOT explicitly ask you to change.
+- Keep the structure (bullets / paragraphs / headings) unless asked to change it.
+- Never invent new facts. If the instruction is ambiguous about what to keep, keep it.
+- Do not prepend any framing like "Here's the updated text:" — output the text directly.`
+    );
+    try {
+        const res = await fetch(AI_PROXY, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: AI_MODEL_DEFAULT,
+                max_tokens: 2000,
+                system,
+                messages: [
+                    { role: 'user', content: `EXISTING TEXT:\n"""\n${existing}\n"""\n\nFOUNDER'S INSTRUCTION:\n"""\n${userInput}\n"""\n\nReturn the full updated text only.` },
+                ],
+            }),
+        });
+        if (!res.ok) return existing.trimEnd() + '\n\n' + userInput;
+        const data = await res.json();
+        let out = (data.content?.[0]?.text || '').trim();
+        // Strip any common wrappers the model might slip in despite instructions.
+        out = out.replace(/^```[a-z]*\n?/i, '').replace(/\n?```$/, '');
+        out = out.replace(/^"""\n?|\n?"""$/g, '');
+        return out || (existing.trimEnd() + '\n\n' + userInput);
+    } catch (e) { return existing.trimEnd() + '\n\n' + userInput; }
+}
+
+// "Move on →" — user wants to skip this step regardless of what's been said.
+// Commit whatever's already in the form field (pre-filled or last accepted)
+// so we don't blank it. If nothing is there, the field just stays empty.
+function wizSkip() {
+    if (!wizardState) return;
+    const step = currentStep();
+    if (!step) return;
+    appendWizMessage('user', '(moving on)');
+    // Spot-edit — one question only; close after the user moves on.
+    if (wizardState.focusStepId) { closeWizard({ keepSession: false }); return; }
+    wizardState.stepIndex++;
+    askCurrentStep();
+    persistWizardState();
+}
+
+// "← Back" — revise the previous question. Decrements the step and re-asks.
+function wizBack() {
+    if (!wizardState) return;
+    // Find the previous answerable step (skipping discovery-only ones that were
+    // auto-handled based on needsPrior).
+    let idx = wizardState.stepIndex - 1;
+    while (idx >= 0) {
+        const s = WIZARD_STEPS[idx];
+        if (!s.needsPrior || wizardState.priorRecord) break;
+        idx--;
+    }
+    if (idx < 0) {
+        appendWizMessage('system', "Already on the first question.");
+        return;
+    }
+    wizardState.stepIndex = idx;
+    wizardState.stepHistory = [];
+    wizardState.pushbackCount = 0;
+    appendWizMessage('system', `← Stepped back to "${WIZARD_STEPS[idx].label}". Your previous answer is still in the form; type a new one, or Move on to keep it.`);
+    askCurrentStep();
+    persistWizardState();
+}
+
+function appendWizMessage(role, text, opts = {}) {
+    const host = document.getElementById('wizMessages');
+    const el = document.createElement('div');
+    el.className = 'msg ' + role;
+    el.textContent = text;
+    host.appendChild(el);
+    host.scrollTop = host.scrollHeight;
+    // Track visible messages so we can replay on resume.
+    if (wizardState) {
+        (wizardState.visibleMessages = wizardState.visibleMessages || []).push({ role, content: text });
+        if (!opts.skipPersist) persistWizardState();
+    }
+    return el;
+}
+
+function applyFieldValueInUI(fid, value) {
+    const el = document.querySelector(`[data-field-id="${fid}"]`);
+    if (el) {
+        el.value = value;
+        markDirty();
+        resizeFieldAndRowMates(el);
+    } else {
+        // Record may not be rendered yet (empty state). Re-render with a stub.
+        renderForm({});
+        const el2 = document.querySelector(`[data-field-id="${fid}"]`);
+        if (el2) {
+            el2.value = value;
+            markDirty();
+            resizeFieldAndRowMates(el2);
+        }
+    }
+}
+
+// After programmatically changing a field's value, re-size it to fit the new
+// content and re-run whichever row-equalize applies to its container. Keeps
+// adjacent columns in sync so a long answer pushes its row-mates down
+// together rather than leaving a ragged edge.
+function resizeFieldAndRowMates(el) {
+    if (!el || el.tagName !== 'TEXTAREA') return;
+    autosize(el);
+    // Numbered card grid (Undertakings / USPs / Method Steps)
+    const card = el.closest('.num-card');
+    if (card) { equaliseCardRow(card); return; }
+    // Quarterly Projects — align Project field and each monthly stone across 3 cols
+    if (el.closest('.qp-card')) { equaliseQuarterlyProjects(); return; }
+    // Target Statement / Measurables — multi-col grid of field-rows
+    const fieldRow = el.closest('.field-row');
+    if (fieldRow?.parentElement?.classList.contains('grid-cols-2') ||
+        fieldRow?.parentElement?.classList.contains('grid-cols-3')) {
+        equaliseFieldRow(el);
+    }
+}
+
+async function boardroomCritique(step, history) {
+    // Call Claude to critique. Return { accept: true/false, pushback?: "…", refined?: "…", note?: "…" }
+    // `history` is the full back-and-forth for THIS step so the mentor sees what
+    // it has already asked and doesn't repeat the same challenge verbatim.
+    // CURRENT PLAN — what's in the form RIGHT NOW (including any edits the
+    // founder has already made in this session). This is the source of truth
+    // for "this quarter's plan". The prior quarter is background only.
+    const currentPlanSnapshot = extractCurrentPlanFromForm();
+    const currentContext = Object.keys(currentPlanSnapshot).some(k => currentPlanSnapshot[k])
+        ? `\n\nCURRENT PLAN STATE (these are the founder's latest edits in this session — THIS is the source of truth for context, not the prior quarter): ${JSON.stringify(currentPlanSnapshot)}`
+        : '';
+    const priorContext = wizardState.priorRecord
+        ? `\n\nPRIOR QUARTER'S RECORD (background reference only — use for reflection, but do NOT quote its numbers or claims unless the founder has confirmed them for this quarter too): ${JSON.stringify(extractCompactPrior(wizardState.priorRecord))}`
+        : '\n\nNo prior quarter record.';
+    const reflectionContext = wizardState.reflection
+        ? `\n\nFOUNDER'S REFLECTION ON LAST QUARTER (their own words): "${wizardState.reflection}"`
+        : '';
+    const attemptCount = history.filter(m => m.role === 'user').length;
+    const system = buildCachedWizardSystem(
+        `Strategy Plan — ${wizardState.businessName}.${currentContext}${priorContext}${reflectionContext}`,
+        `You are interviewing the founder to build this quarter's strategy plan, one field at a time.
+
+Section: "${step.label}"
+Question you asked: "${step.ask}"
+This is the founder's attempt #${attemptCount} at answering.
+
+CORE PHILOSOPHY — 10% INPUT, 90% OUTPUT.
+The founder is giving you 10%. Your job — as the Boardroom Mentor — is to produce the other 90%. Think of yourself as a top-tier strategic consultant who has been briefed on the business and is now drafting the plan document. The founder will approve or tweak what you write; your job is to write it, not to interrogate them. Draw on:
+- Their input in this step (the 10%)
+- The CURRENT PLAN STATE already filled in (everything else they've said this session)
+- The PRIOR QUARTER'S RECORD (for reflection, not for lifting content)
+- The FOUNDER'S REFLECTION if given
+- Your domain expertise in business operating systems, portfolio strategy, and the mentor playbook
+
+GUIDING PRINCIPLE — ACCEPT AND EXPAND.
+Accept ANY answer that has any substance at all — even a single sentence, a few bullets, or a fragment is enough. Your refined output does the heavy lifting. Push back ONLY if the answer has literally zero substance — e.g. pure platitudes ("be amazing", "crush it") or a refusal. A terse one-liner with a real fact in it (a number, a name, a direction) is plenty. Expand it into a full professional section.
+
+MAX 1 PUSH-BACK.
+After one push-back (if any), ALWAYS accept and produce rich output from what you have. Do not ask for more.
+
+IMPORTANT: Look at the full conversation above. If you've already pushed back, DO NOT push back again. Accept and refine.
+
+Reply with a JSON object ONLY, nothing else. Shape:
+{"accept": true|false, "pushback"?: "one short paragraph (2–3 sentences max) in UK English, naming one specific thing to add or sharpen — never repeat a point you've already made", "refined"?: "a fully-developed, professional-quality version of the founder's answer — see rules below — MUST be included on every accept", "note"?: "one short confirmation line after accept, optional"}
+
+"refined" RULES (REQUIRED on every accept) — this is the heart of the tool. The founder is likely dictating or bullet-pointing; your job is to turn that raw material into something they'd be proud to put in a strategic plan document.
+
+0. CUMULATIVE ANSWER — CRITICAL. On attempt 2 or later (after you've pushed back), the founder is ADDING TO or CLARIFYING their earlier answer, not replacing it. The refined output MUST combine every fact, number, name, claim, and substantial point from ALL of the founder's messages in this conversation — not just the latest. Treat the whole conversation as ONE BUILDING ANSWER. Example: if their first message said "£20–25k/month net profit from UK property" and their second message (replying to your push-back on delivery model) said "long-term buy-and-hold HMOs and single lets", the refined version must include BOTH — the income figure AND the delivery model — in a single coherent output. Dropping either half is a failure on your part.
+
+1. EXPAND rough input. If the founder gave bullets, a rough paragraph, or conversational dictation, write it up as proper prose or a structured list with headings/bullets — whatever fits the section. Don't just tidy commas.
+2. APPLY your expertise. Frame the answer the way the Boardroom Mentor would — bringing the right business-planning structure (mission vs vision vs target, outcome vs activity, input vs output metric, etc.). Give it the weight a professional plan deserves.
+3. PRESERVE every specific fact. Every number, currency, percentage, count, name, product, timeframe, person, and place the founder gave you MUST appear in the refined version unchanged. You may re-word around them; you may not alter or drop them.
+4. NEVER invent facts. If the founder didn't say a specific number or name, don't add one. If they said "20–25k", don't write "£22k". If they said "a few clients", don't write "5 clients". Use their own numbers verbatim.
+5. UK English spelling, grammar, punctuation.
+6. Match the expected shape of the field:
+   - Nine-year / three-year / one-year Target: paragraph + bullet-structured sub-sections (Business Model, Portfolio, Delivery, Team, Founder Role, etc.) when the founder gave enough substance for that.
+   - Measurables: tight numeric target + "how we measure it" line.
+   - Objective / Customer Profile / Enticement: one well-crafted paragraph.
+   - Target Statement parts: one tight sentence each.
+   - Quarterly Projects: name + focus + success criteria, 2–4 short lines.
+   - Monthly stepping stones: one concrete deliverable per month, one sentence each.
+7. If the founder's answer was already polished and professional, return it verbatim.
+
+CONTEXT: The founder is likely dictating on a phone or typing rough bullets. Treat the input as raw material. Do not penalise them for informal phrasing, missing capitalisation, or incomplete sentences — that's the RAW INPUT. Your job is to turn it into publication-quality output.
+
+Do not accept pure platitudes ('be the best', 'crush it'). DO accept rough or terse answers if they have any real substance — your job is to build them up, not reject them. Prefer 'accept with a good refined expansion' over 'reject'. Push back only when the answer has no substance at all.`
+    );
+    try {
+        const res = await fetch(AI_PROXY, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model: AI_MODEL_DEFAULT,
+                max_tokens: 2500,
+                system,
+                // Pass the full per-step conversation so the model sees what it's already asked.
+                messages: history.map(m => ({ role: m.role, content: m.content })),
+            }),
+        });
+        if (!res.ok) return { accept: true }; // fail open
+        const data = await res.json();
+        const text = (data.content?.[0]?.text || '').trim();
+        // Extract JSON
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) return { accept: true };
+        const parsed = JSON.parse(jsonMatch[0]);
+        return parsed;
+    } catch (e) {
+        return { accept: true };
+    }
+}
+
+function extractCompactPrior(rec) {
+    const f = rec.fields || {};
+    // fields are keyed by ID because loadPriorQuarter uses returnFieldsByFieldId
+    const readSelect = v => (v && typeof v === 'object') ? v.name : v;
+    return {
+        quarter: readSelect(f[OBJSTRAT.quarter]),
+        year: readSelect(f[OBJSTRAT.year]),
+        nineYear: f[OBJSTRAT.nineYearTarget],
+        threeYear: f[OBJSTRAT.threeYearTarget],
+        oneYear: f[OBJSTRAT.oneYearTarget],
+        qp1: f[OBJSTRAT.quarterlyProjects[0]],
+        qp2: f[OBJSTRAT.quarterlyProjects[1]],
+        qp3: f[OBJSTRAT.quarterlyProjects[2]],
+    };
+}
+
+// Snapshot the form fields the wizard might reference as context. Pulls from
+// the actual DOM inputs/textareas, so any edits the founder has made in this
+// session (whether via the wizard or typed directly into the form) are
+// reflected. Returns a compact object — only the fields the mentor needs for
+// cross-referencing, not the full 60+ field record.
+function extractCurrentPlanFromForm() {
+    const read = fid => {
+        const el = document.querySelector(`[data-field-id="${fid}"]`);
+        if (!el) return '';
+        const v = (el.value || '').trim();
+        return v || '';
+    };
+    return {
+        objective: read(OBJSTRAT.objective),
+        targetWhat: read(OBJSTRAT.targetWhat),
+        targetWho: read(OBJSTRAT.targetWho),
+        targetHow: read(OBJSTRAT.targetHow),
+        customerProfile: read(OBJSTRAT.customerProfile),
+        enticement: read(OBJSTRAT.enticement),
+        nineYearTarget: read(OBJSTRAT.nineYearTarget),
+        threeYearTarget: read(OBJSTRAT.threeYearTarget),
+        threeYearMeas: OBJSTRAT.threeYearMeas.map(read).filter(Boolean),
+        oneYearTarget: read(OBJSTRAT.oneYearTarget),
+        oneYearMeas: OBJSTRAT.oneYearMeas.map(read).filter(Boolean),
+        quarterlyProjects: OBJSTRAT.quarterlyProjects.map(read).filter(Boolean),
+        monthlyStones: OBJSTRAT.monthlyStones.map(stones => stones.map(read).filter(Boolean)),
+    };
+}
+
+function finaliseWizard() {
+    // Reaching the end IS the engagement the pre-fill guard waits for — the
+    // founder has been walked through every section. Without this, a run where
+    // every step was skipped ("Move on →" never touches a field, so nothing
+    // marks dirty) ends on a greyed-out Save while this message tells them to
+    // press it.
+    markDirty();
+    appendWizMessage('assistant', 'All sections captured. I have pre-filled the form. Review, then hit "Save changes" at the top. After saving, I will offer to push the three Quarterly Projects into the Projects table as real project records with linked monthly Tasks.');
+    document.getElementById('wizStepLabel').textContent = 'Complete — review form';
+    // Wizard finished cleanly — drop the saved session so the next open starts fresh.
+    clearWizardSession();
+}
+
+// Add a "✨ Revise" button on each form field that opens the wizard jumped to
+// that specific step. Only attach for fields that have a matching wizard step.
+function attachReviseAffordances() {
+    const stepByFid = new Map();
+    for (const step of WIZARD_STEPS) {
+        if (!step.targetFid) continue;
+        try { stepByFid.set(step.targetFid(), step.id); } catch (e) {}
+    }
+    document.querySelectorAll('[data-field-id]').forEach(el => {
+        const fid = el.dataset.fieldId;
+        const stepId = stepByFid.get(fid);
+        if (!stepId) return;
+        if (el.dataset.reviseAttached) return;
+        el.dataset.reviseAttached = '1';
+        el.addEventListener('focus', () => showReviseButton(el, stepId));
+        el.addEventListener('blur', () => {
+            // Delay so clicking the button registers before blur hides it.
+            setTimeout(() => hideReviseButton(el), 150);
+        });
+    });
+}
+
+function showReviseButton(field, stepId) {
+    let btn = field.parentElement.querySelector('.revise-btn');
+    if (!btn) {
+        btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'revise-btn';
+        btn.textContent = '✨ Revise with AI';
+        btn.onmousedown = e => { e.preventDefault(); /* keep focus */ };
+        btn.onclick = () => { openWizard({ focusStepId: stepId }); };
+        field.parentElement.appendChild(btn);
+    }
+    btn.style.display = 'inline-flex';
+}
+
+function hideReviseButton(field) {
+    const btn = field.parentElement?.querySelector('.revise-btn');
+    if (btn) btn.style.display = 'none';
+}
+
+// Warn before unload if form has unsaved edits (or the wizard is mid-flow).
+window.addEventListener('beforeunload', e => {
+    if (isDirty) { e.preventDefault(); e.returnValue = ''; return ''; }
+});
+
+function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+}
+
+// ═════════════════════════════════════════════════════════════════════
+// PDF EXPORT — build a purpose-made printable layout from the loaded
+// record (not a screenshot of the form) so the output is professional,
+// branded, and doesn't include nav chrome or wizard panels. Uses
+// html2pdf.js from CDN.
+// ═════════════════════════════════════════════════════════════════════
+
+async function exportPlanToPDF() {
+    if (!currentRecord) {
+        setStatus('warn', 'Save the plan first, then export.');
+        return;
+    }
+    if (typeof html2pdf === 'undefined') {
+        setStatus('error', 'PDF library failed to load. Check your connection and retry.');
+        return;
+    }
+    const { businessId, quarter, year } = getSelection();
+    const businessName = allBusinessesLocal.find(b => b.id === businessId)?.name || 'Business';
+    // Use the live form values (not currentRecord.fields) so the PDF reflects
+    // what's on screen — avoids any field-key / staleness issues.
+    const fieldData = readAllFormFields();
+    const doc = buildPrintableDocument(fieldData, businessName, quarter, year);
+
+    // Full-screen blocker so the founder doesn't see the staging element
+    // flash in and out of view while html2canvas is rendering.
+    const blocker = document.createElement('div');
+    blocker.id = 'pdf-blocker';
+    blocker.style.cssText = 'position:fixed;inset:0;background:rgba(28,36,34,0.75);z-index:10000;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-size:16px;font-weight:600;gap:14px;font-family:"DM Sans",system-ui,sans-serif';
+    blocker.innerHTML = '<div class="spinner" style="width:36px;height:36px;border:3px solid rgba(255,255,255,0.25);border-top-color:#fff;border-radius:50%;animation:spin 0.8s linear infinite"></div><div>Building your PDF…</div>';
+    document.body.appendChild(blocker);
+
+    // Staging container — html2canvas requires the element to be in the
+    // viewport, so we position it top-left at z-index just below the blocker.
+    // Width 794px = A4 portrait at 96 DPI.
+    const stage = document.createElement('div');
+    stage.style.cssText = 'position:fixed;top:0;left:0;width:794px;background:#fff;color:#1C2422;font-family:"DM Sans",system-ui,sans-serif;z-index:9999;overflow:visible';
+    stage.appendChild(doc);
+    document.body.appendChild(stage);
+
+    try {
+        const fileName = `${slugify(businessName)}-${quarter}-${year}-plan.pdf`;
+        await html2pdf()
+            .set({
+                margin: [14, 14, 18, 14],
+                filename: fileName,
+                pagebreak: { mode: ['css', 'legacy'], avoid: ['.pdf-section', '.pdf-card', '.pdf-qp', '.num-row'] },
+                html2canvas: {
+                    scale: 2,
+                    useCORS: true,
+                    letterRendering: true,
+                    backgroundColor: '#FFFFFF',
+                    // Force a consistent rendering window so content doesn't clip.
+                    windowWidth: 794,
+                    scrollX: 0,
+                    scrollY: 0,
+                },
+                jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            })
+            .from(stage)
+            .save();
+        setStatus('success', `✓ ${fileName} downloaded.`);
+        setTimeout(() => setStatus('', ''), 3000);
+    } catch (e) {
+        console.error('[exportPlanToPDF]', e);
+        setStatus('error', `PDF export failed: ${e.message || e}. Check the console for details.`);
+    } finally {
+        if (stage.parentNode) stage.parentNode.removeChild(stage);
+        if (blocker.parentNode) blocker.parentNode.removeChild(blocker);
+    }
+}
+
+function buildPrintableDocument(f, businessName, quarter, year) {
+    const today = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
+    // Helpers
+    const esc = escapeHtml;
+    const para = v => (v || '').trim();
+    const nonEmpty = v => !!(v && String(v).trim());
+    const readSel = v => (v && typeof v === 'object') ? (v.name || '') : (v || '');
+    const mdToHtml = md => {
+        // Render line-breaks + very light markdown (bold, bullets, headers) to nice HTML.
+        const lines = String(md || '').split('\n');
+        const out = [];
+        let inList = false;
+        for (let raw of lines) {
+            let line = raw.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            const isBullet = /^[•\-*]\s+/.test(line) || /^\d+\.\s+/.test(line);
+            if (isBullet) {
+                if (!inList) { out.push('<ul>'); inList = true; }
+                out.push('<li>' + line.replace(/^[•\-*]\s+/, '').replace(/^\d+\.\s+/, '') + '</li>');
+            } else {
+                if (inList) { out.push('</ul>'); inList = false; }
+                if (line.trim()) out.push('<p>' + line + '</p>');
+            }
+        }
+        if (inList) out.push('</ul>');
+        return out.join('');
+    };
+
+    const root = document.createElement('div');
+    root.className = 'pdf-root';
+    root.innerHTML = `
+<style>
+/* PDF stage is rasterised by html2canvas — sage token values inlined as hex literals */
+.pdf-root { padding: 16px 20px; }
+.pdf-root * { box-sizing: border-box; }
+.pdf-cover { text-align: left; padding: 28px 20px 40px; border-bottom: 4px solid #2C6E49; margin-bottom: 30px; }
+.pdf-cover .eyebrow { font-size: 11px; letter-spacing: 3px; color: #5A6660; text-transform: uppercase; font-weight: 600; margin-bottom: 8px; }
+.pdf-cover h1 { font-size: 36px; font-weight: 800; margin-bottom: 4px; color: #1C2422; letter-spacing: -0.5px; }
+.pdf-cover .subtitle { font-size: 18px; color: #5A6660; margin-bottom: 18px; font-weight: 500; }
+.pdf-cover .meta { display: flex; gap: 28px; font-size: 12px; color: #5A6660; }
+.pdf-cover .meta strong { display: block; font-size: 15px; color: #1C2422; font-weight: 700; }
+.pdf-section { margin-bottom: 22px; page-break-inside: avoid; }
+.pdf-section h2 { font-size: 17px; font-weight: 700; color: #2C6E49; border-bottom: 2px solid #DDE8DF; padding-bottom: 4px; margin-bottom: 12px; }
+.pdf-section h3 { font-size: 13px; font-weight: 700; color: #1C2422; margin-top: 10px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.04em; }
+.pdf-card { background: #FBFBF9; border: 1px solid #DDE1D9; border-radius: 8px; padding: 12px 14px; margin-bottom: 10px; page-break-inside: avoid; }
+.pdf-card .card-label { font-size: 10px; color: #8A928C; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600; margin-bottom: 4px; }
+.pdf-card .card-value { font-size: 12px; color: #1C2422; line-height: 1.55; }
+.pdf-card .card-value p { margin-bottom: 6px; }
+.pdf-card .card-value p:last-child { margin-bottom: 0; }
+.pdf-card .card-value ul { margin-left: 16px; margin-bottom: 4px; }
+.pdf-card .card-value li { margin-bottom: 2px; }
+.pdf-cols-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.pdf-qp { background: #FBFBF9; border: 1px solid #DDE1D9; border-radius: 8px; padding: 12px; page-break-inside: avoid; }
+.pdf-qp h3 { font-size: 12px; color: #2C6E49; margin-top: 0; margin-bottom: 6px; }
+.pdf-qp .qp-body { font-size: 11px; line-height: 1.5; color: #1C2422; margin-bottom: 8px; }
+.pdf-qp .qp-meta { font-size: 10px; color: #5A6660; margin-bottom: 6px; }
+.pdf-qp .qp-meta strong { color: #1C2422; }
+.pdf-qp .qp-stones { margin-top: 6px; padding-top: 6px; border-top: 1px dashed #DDE1D9; }
+.pdf-qp .qp-stones .stone-row { display: flex; gap: 6px; margin-bottom: 3px; font-size: 10px; }
+.pdf-qp .qp-stones .stone-m { font-weight: 700; color: #2C6E49; min-width: 26px; }
+.pdf-num-list { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.pdf-num-list .num-row { background: #FBFBF9; border: 1px solid #DDE1D9; border-radius: 6px; padding: 6px 10px; font-size: 11px; line-height: 1.45; page-break-inside: avoid; }
+.pdf-num-list .num-row .n { font-weight: 700; color: #2C6E49; margin-right: 6px; }
+.pdf-footer { margin-top: 26px; padding-top: 10px; border-top: 1px solid #DDE1D9; font-size: 10px; color: #8A928C; text-align: center; }
+.page-break { page-break-after: always; }
+</style>
+
+<div class="pdf-cover">
+  <div class="eyebrow">Objective &amp; Strategy Plan</div>
+  <h1>${esc(businessName)}</h1>
+  <div class="subtitle">${esc(quarter)} ${esc(year)}</div>
+  <div class="meta">
+    <div><strong>${esc(quarter)}</strong>Quarter</div>
+    <div><strong>${esc(year)}</strong>Year</div>
+    <div><strong>${esc(today)}</strong>Generated</div>
+  </div>
+</div>
+
+${nonEmpty(f[OBJSTRAT.objective]) ? `
+<div class="pdf-section">
+  <h2>Objective</h2>
+  <div class="pdf-card"><div class="card-value">${mdToHtml(f[OBJSTRAT.objective])}</div></div>
+</div>` : ''}
+
+${(nonEmpty(f[OBJSTRAT.targetWhat]) || nonEmpty(f[OBJSTRAT.targetWho]) || nonEmpty(f[OBJSTRAT.targetHow])) ? `
+<div class="pdf-section">
+  <h2>Target Statement</h2>
+  <div class="pdf-cols-3">
+    <div class="pdf-card"><div class="card-label">What we do</div><div class="card-value">${mdToHtml(f[OBJSTRAT.targetWhat])}</div></div>
+    <div class="pdf-card"><div class="card-label">Who we do it for</div><div class="card-value">${mdToHtml(f[OBJSTRAT.targetWho])}</div></div>
+    <div class="pdf-card"><div class="card-label">How we do it</div><div class="card-value">${mdToHtml(f[OBJSTRAT.targetHow])}</div></div>
+  </div>
+</div>` : ''}
+
+${nonEmpty(f[OBJSTRAT.customerProfile]) ? `
+<div class="pdf-section">
+  <h2>Customer Profile</h2>
+  <div class="pdf-card"><div class="card-value">${mdToHtml(f[OBJSTRAT.customerProfile])}</div></div>
+</div>` : ''}
+
+${(() => {
+    const items = OBJSTRAT.undertakings.map(fid => f[fid]).filter(nonEmpty);
+    if (!items.length) return '';
+    return `<div class="pdf-section"><h2>Undertakings</h2><div class="pdf-num-list">${items.map((t, i) =>
+        `<div class="num-row"><span class="n">${String(i + 1).padStart(2, '0')}</span>${mdToHtml(t)}</div>`
+    ).join('')}</div></div>`;
+})()}
+
+${(() => {
+    const items = OBJSTRAT.usps.map(fid => f[fid]).filter(nonEmpty);
+    if (!items.length) return '';
+    return `<div class="pdf-section"><h2>Original Selling Points</h2><div class="pdf-num-list">${items.map((t, i) =>
+        `<div class="num-row"><span class="n">${String(i + 1).padStart(2, '0')}</span>${mdToHtml(t)}</div>`
+    ).join('')}</div></div>`;
+})()}
+
+${(() => {
+    const items = OBJSTRAT.methodSteps.map(fid => f[fid]).filter(nonEmpty);
+    if (!items.length) return '';
+    return `<div class="pdf-section"><h2>Main Method</h2><div class="pdf-num-list">${items.map((t, i) =>
+        `<div class="num-row"><span class="n">${String(i + 1).padStart(2, '0')}</span>${mdToHtml(t)}</div>`
+    ).join('')}</div></div>`;
+})()}
+
+${nonEmpty(f[OBJSTRAT.enticement]) ? `
+<div class="pdf-section">
+  <h2>Enticement</h2>
+  <div class="pdf-card"><div class="card-value">${mdToHtml(f[OBJSTRAT.enticement])}</div></div>
+</div>` : ''}
+
+<div class="page-break"></div>
+
+${nonEmpty(f[OBJSTRAT.nineYearTarget]) ? `
+<div class="pdf-section">
+  <h2>Nine-Year Target</h2>
+  <div class="pdf-card"><div class="card-value">${mdToHtml(f[OBJSTRAT.nineYearTarget])}</div></div>
+</div>` : ''}
+
+${nonEmpty(f[OBJSTRAT.threeYearTarget]) ? `
+<div class="pdf-section">
+  <h2>Three-Year Target</h2>
+  <div class="pdf-card"><div class="card-value">${mdToHtml(f[OBJSTRAT.threeYearTarget])}</div></div>
+  <div class="pdf-cols-3">
+    ${OBJSTRAT.threeYearMeas.map((fid, i) => nonEmpty(f[fid]) ?
+      `<div class="pdf-card"><div class="card-label">Measurable ${i + 1}</div><div class="card-value">${mdToHtml(f[fid])}</div></div>` : ''
+    ).join('')}
+  </div>
+</div>` : ''}
+
+${nonEmpty(f[OBJSTRAT.oneYearTarget]) ? `
+<div class="pdf-section">
+  <h2>One-Year Target</h2>
+  <div class="pdf-card"><div class="card-value">${mdToHtml(f[OBJSTRAT.oneYearTarget])}</div></div>
+  <div class="pdf-cols-3">
+    ${OBJSTRAT.oneYearMeas.map((fid, i) => nonEmpty(f[fid]) ?
+      `<div class="pdf-card"><div class="card-label">Measurable ${i + 1}</div><div class="card-value">${mdToHtml(f[fid])}</div></div>` : ''
+    ).join('')}
+  </div>
+</div>` : ''}
+
+${(() => {
+    const qps = OBJSTRAT.quarterlyProjects.map((fid, i) => ({ i, text: f[fid] })).filter(q => nonEmpty(q.text));
+    if (!qps.length) return '';
+    return `<div class="pdf-section"><h2>Quarterly Priority Projects</h2><div class="pdf-cols-3">${qps.map(q => {
+        const d = OBJSTRAT.qpDetails[q.i];
+        const stones = OBJSTRAT.monthlyStones[q.i];
+        const unit = readSel(f[d.kpiUnit]);
+        return `<div class="pdf-qp">
+            <h3>⭐ Project ${q.i + 1}</h3>
+            <div class="qp-body">${mdToHtml(q.text)}</div>
+            ${nonEmpty(f[d.kpiName]) ? `<div class="qp-meta"><strong>KPI:</strong> ${esc(f[d.kpiName])}${unit ? ' (' + esc(unit) + ')' : ''}</div>` : ''}
+            ${nonEmpty(f[d.tracking]) ? `<div class="qp-meta"><strong>Tracking:</strong> ${esc(f[d.tracking])}</div>` : ''}
+            ${nonEmpty(f[d.dod]) ? `<div class="qp-meta"><strong>Definition of Done:</strong> ${esc(f[d.dod])}</div>` : ''}
+            <div class="qp-stones">
+                ${stones.map((sFid, m) => nonEmpty(f[sFid]) ?
+                    `<div class="stone-row"><span class="stone-m">M${m + 1}</span><span>${esc(f[sFid])}</span></div>` : ''
+                ).join('')}
+            </div>
+        </div>`;
+    }).join('')}</div></div>`;
+})()}
+
+<div class="pdf-footer">
+  Generated ${esc(today)} · Objective &amp; Strategy Plan · ${esc(businessName)} · ${esc(quarter)} ${esc(year)}
+</div>`;
+    return root;
+}

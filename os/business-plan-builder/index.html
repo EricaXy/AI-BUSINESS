@@ -1,0 +1,2540 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Business Launch Plan Builder</title>
+<link rel="stylesheet" href="../../css/tokens.css?v=1">
+<link rel="stylesheet" href="../../css/sync-bar.css?v=3">
+<link rel="stylesheet" href="../../css/quick-task.css?v=2">
+<script defer src="../../js/quick-task.js?v=4"></script>
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{--radius:12px}
+body{line-height:1.6;height:100vh;overflow:hidden;background:var(--bg-app);color:var(--text-primary)}
+
+/* ── Setup Screen ── */
+.setup{display:flex;align-items:center;justify-content:center;height:100vh;padding:1.5rem}
+.setup-card{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:16px;padding:2.5rem;max-width:520px;width:100%}
+.setup-card h1{font-size:1.6rem;margin-bottom:.25rem}
+.setup-card .brand{color:var(--accent);font-size:.85rem;font-weight:var(--fw-semibold);margin-bottom:1.5rem}
+.setup-card p{color:var(--text-secondary);font-size:.92rem;margin-bottom:1.5rem}
+.setup-card label{display:block;font-weight:var(--fw-semibold);font-size:.88rem;margin-bottom:.35rem}
+.setup-card .hint{font-size:.78rem;color:var(--text-secondary);margin-bottom:1rem}
+.setup-card select,.setup-card input[type="text"],.setup-card input[type="password"]{
+  width:100%;padding:10px 14px;background:var(--bg-app);color:var(--text-primary);
+  border:1px solid var(--border-default);border-radius:8px;font-size:.92rem;font-family:inherit;margin-bottom:.5rem}
+.setup-card select:focus,.setup-card input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.setup-row{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin-bottom:1rem}
+.setup-btn{width:100%;padding:12px;background:var(--accent);color:#fff;border:none;border-radius:8px;font-size:1rem;font-weight:var(--fw-semibold);cursor:pointer;margin-top:.5rem}
+.setup-btn:hover{background:var(--accent)}
+.setup-btn:disabled{opacity:.5;cursor:not-allowed}
+.setup-error{color:var(--danger);font-size:.85rem;margin-top:.5rem;display:none}
+
+/* ── App Layout ── */
+.app{display:flex;height:100vh}
+.sidebar{width:280px;min-width:280px;background:var(--bg-surface);border-right:1px solid var(--border-default);display:flex;flex-direction:column;overflow-y:auto}
+.sidebar-logo{padding:1.25rem 1.5rem;border-bottom:1px solid var(--border-default)}
+.sidebar-logo h2{font-size:1.05rem;color:var(--accent)}
+.sidebar-logo span{color:var(--text-secondary);font-size:.78rem;display:block;margin-top:2px}
+.section-list{flex:1;padding:.75rem 0}
+.section-item{display:flex;align-items:center;gap:10px;padding:9px 1.5rem;font-size:.85rem;color:var(--text-secondary);cursor:default;transition:background .15s}
+.section-item.active{color:var(--accent);font-weight:var(--fw-semibold)}
+.section-item.done{color:var(--success);cursor:pointer}
+.section-item.done:hover{background:var(--success-bg)}
+.section-item.reviewing{color:var(--accent);font-weight:var(--fw-semibold);background:var(--accent-soft)}
+.section-dot{width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.65rem;font-weight:var(--fw-bold);flex-shrink:0;border:2px solid var(--border-default);color:var(--text-secondary)}
+.section-item.active .section-dot{border-color:var(--accent);color:var(--accent)}
+.section-item.done .section-dot{border-color:var(--success);background:var(--success);color:#fff}
+.section-item.reviewing .section-dot{border-color:var(--accent);background:var(--accent);color:#fff}
+.sidebar-footer{padding:1rem 1.5rem;border-top:1px solid var(--border-default);display:flex;flex-direction:column;gap:8px}
+.sidebar-footer button{padding:10px;border:1px solid var(--border-default);background:var(--bg-surface-2);color:var(--text-secondary);border-radius:8px;cursor:pointer;font-size:.85rem;font-weight:var(--fw-semibold);transition:all .15s}
+.sidebar-footer button:hover{color:var(--text-primary);border-color:var(--text-secondary)}
+.sidebar-footer .btn-plan{background:var(--accent);color:#fff;border-color:var(--accent)}
+.sidebar-footer .btn-plan:hover{background:var(--accent)}
+.sidebar-footer .btn-plan:disabled{opacity:.4;cursor:not-allowed}
+
+/* ── Chat Area ── */
+.chat-area{flex:1;display:flex;flex-direction:column;height:100vh}
+.chat-header{background:var(--bg-surface);border-bottom:1px solid var(--border-default);padding:.75rem 2rem;display:flex;justify-content:space-between;align-items:center}
+.chat-header h1{font-size:1.1rem}
+.chat-header .phase{font-size:.8rem;color:var(--text-secondary)}
+.chat-messages{flex:1;overflow-y:auto;padding:1.5rem 2rem;display:flex;flex-direction:column;gap:1rem}
+.msg{max-width:75%;animation:fadeIn .3s ease}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.msg-ai{align-self:flex-start}
+.msg-user{align-self:flex-end}
+.msg-bubble{padding:12px 16px;border-radius:16px;font-size:.92rem;line-height:1.65}
+.msg-ai .msg-bubble{background:var(--bg-surface);border:1px solid var(--border-default);border-bottom-left-radius:4px}
+.msg-user .msg-bubble{background:var(--accent);color:#fff;border-bottom-right-radius:4px}
+.msg-label{font-size:.7rem;font-weight:var(--fw-semibold);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;padding:0 4px}
+.msg-ai .msg-label{color:var(--accent)}
+.msg-user .msg-label{color:var(--text-secondary);text-align:right}
+.msg-bubble p{margin-bottom:.5rem}
+.msg-bubble p:last-child{margin-bottom:0}
+.msg-bubble strong{color:inherit;font-weight:var(--fw-bold)}
+.msg-bubble ul,.msg-bubble ol{margin:.5rem 0 .5rem 1.25rem}
+.msg-bubble li{margin-bottom:.25rem}
+
+/* Section captured indicator */
+.section-captured{background:var(--success-bg);border:1px solid var(--success-border);border-radius:10px;padding:10px 14px;display:flex;align-items:center;gap:8px;font-size:.85rem;color:var(--success);font-weight:var(--fw-semibold);align-self:flex-start;animation:fadeIn .4s ease}
+.section-captured svg{flex-shrink:0}
+
+/* Typing indicator */
+.typing{align-self:flex-start;padding:0 4px}
+.typing .msg-bubble{display:flex;gap:4px;padding:14px 20px}
+.typing-dot{width:8px;height:8px;border-radius:50%;background:var(--text-secondary);animation:typingBounce 1.4s infinite}
+.typing-dot:nth-child(2){animation-delay:.2s}
+.typing-dot:nth-child(3){animation-delay:.4s}
+@keyframes typingBounce{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
+
+/* Input area */
+.chat-input{padding:1rem 2rem 1.5rem;background:var(--bg-app);border-top:1px solid var(--border-default)}
+.input-row{display:flex;gap:10px;align-items:flex-end;max-width:800px;margin:0 auto}
+.input-row textarea{flex:1;padding:12px 16px;background:var(--bg-surface);color:var(--text-primary);border:1px solid var(--border-default);border-radius:12px;font-size:.92rem;font-family:inherit;resize:none;min-height:48px;max-height:150px;line-height:1.5;overflow-y:auto}
+.input-row textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.input-row textarea:disabled{opacity:.5}
+.send-btn{width:48px;height:48px;border-radius:12px;background:var(--accent);color:#fff;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:background .15s}
+.send-btn:hover{background:var(--accent)}
+.send-btn:disabled{opacity:.4;cursor:not-allowed}
+.send-btn svg{width:20px;height:20px}
+
+/* ── Section Review Panel (in chat area) ── */
+.review-panel{display:none;flex:1;overflow-y:auto;padding:1.5rem 2rem;flex-direction:column;gap:1rem}
+.review-panel.active{display:flex}
+.review-panel .rp-header{display:flex;align-items:center;gap:12px;margin-bottom:.5rem}
+.review-panel .rp-icon{font-size:1.6rem;width:42px;height:42px;display:flex;align-items:center;justify-content:center;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:10px}
+.review-panel .rp-title{font-size:1.15rem;font-weight:var(--fw-bold)}
+.review-panel .rp-subtitle{font-size:.82rem;color:var(--text-secondary)}
+.review-panel .rp-back{padding:8px 16px;border-radius:8px;font-size:.82rem;font-weight:var(--fw-semibold);cursor:pointer;border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-secondary);margin-left:auto;transition:all .15s}
+.review-panel .rp-back:hover{color:var(--text-primary);border-color:var(--text-secondary)}
+.review-panel .rp-section-label{font-size:.75rem;font-weight:var(--fw-semibold);color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-top:.75rem;margin-bottom:.35rem}
+.review-panel .rp-data-card{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:10px;padding:14px 16px;margin-bottom:.5rem}
+.review-panel .rp-data-label{font-size:.72rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;font-weight:var(--fw-semibold);margin-bottom:3px}
+.review-panel .rp-data-value{font-size:.9rem;color:var(--text-primary);line-height:1.6}
+.review-panel .rp-disc-msg{padding:10px 14px;border-bottom:1px solid var(--border-default)}
+.review-panel .rp-disc-msg:last-child{border-bottom:none}
+.review-panel .rp-disc-role{font-size:.7rem;font-weight:var(--fw-bold);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px}
+.review-panel .rp-disc-role.ai{color:var(--accent)}
+.review-panel .rp-disc-role.user{color:var(--success)}
+.review-panel .rp-disc-text{font-size:.85rem;color:var(--text-primary);line-height:1.6}
+.review-panel .rp-disc-wrap{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:10px;max-height:300px;overflow-y:auto;margin-bottom:.75rem}
+.review-panel .rp-disc-empty{padding:16px;text-align:center;color:var(--text-secondary);font-size:.85rem;font-style:italic}
+.review-panel .rp-edit-wrap{background:var(--bg-surface);border:1px solid var(--accent);border-radius:10px;padding:14px}
+.review-panel .rp-edit-title{font-size:.82rem;font-weight:var(--fw-semibold);color:var(--accent);margin-bottom:4px}
+.review-panel .rp-edit-hint{font-size:.8rem;color:var(--text-secondary);margin-bottom:10px}
+.review-panel .rp-edit-row{display:flex;gap:8px}
+.review-panel .rp-edit-row textarea{flex:1;padding:10px 14px;background:var(--bg-app);color:var(--text-primary);border:1px solid var(--border-default);border-radius:8px;font-size:.88rem;font-family:inherit;resize:none;min-height:44px;max-height:120px;line-height:1.5}
+.review-panel .rp-edit-row textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.review-panel .rp-edit-row textarea:disabled{opacity:.5}
+.review-panel .rp-edit-btn{padding:0 16px;border-radius:8px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:var(--fw-semibold);font-size:.85rem;white-space:nowrap}
+.review-panel .rp-edit-btn:hover{background:var(--accent)}
+.review-panel .rp-edit-btn:disabled{opacity:.4;cursor:not-allowed}
+.review-panel .rp-edit-status{font-size:.8rem;color:var(--text-secondary);margin-top:8px;display:none}
+.review-panel .rp-edit-status.error{color:var(--danger)}
+.review-panel .rp-edit-status.success{color:var(--success)}
+
+/* ── Plan Overlay ── */
+.plan-overlay{position:fixed;inset:0;z-index:1000;background:var(--bg-app);overflow-y:auto;display:none}
+.plan-overlay.active{display:block}
+.plan-bar{position:sticky;top:0;z-index:10;background:var(--bg-surface);border-bottom:1px solid var(--border-default);padding:.75rem 2rem;display:flex;justify-content:space-between;align-items:center}
+.plan-bar button{padding:8px 18px;border-radius:8px;font-size:.88rem;font-weight:var(--fw-semibold);cursor:pointer;border:none}
+.plan-bar .btn-back{background:var(--bg-surface-2);color:var(--text-secondary);border:1px solid var(--border-default)}
+.plan-bar .btn-back:hover{color:var(--text-primary)}
+.plan-bar .btn-pdf{background:var(--accent);color:#fff}
+.plan-bar .btn-pdf:hover{background:var(--accent)}
+.plan-wrap{max-width:960px;margin:0 auto;padding:3rem 2rem 2rem}
+
+/* Plan Header */
+.plan-hdr{text-align:center;margin-bottom:2.5rem}
+.plan-hdr h1{font-size:2.4rem;font-weight:800;background:var(--accent);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:.5rem}
+.plan-sub{font-size:1.05rem;color:var(--text-secondary);font-weight:var(--fw-medium)}
+.plan-date{font-size:.82rem;color:var(--text-secondary);margin-top:.5rem;opacity:.7}
+
+/* KPI Row */
+.kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:2.5rem}
+.kpi-card{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius);padding:1.25rem;text-align:center}
+.kpi-num{font-size:1.6rem;font-weight:800;color:var(--accent);line-height:1.2;margin-bottom:.25rem}
+.kpi-label{font-size:.72rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;font-weight:var(--fw-semibold)}
+
+/* Sticky Tab Nav */
+.plan-tabs{position:sticky;top:55px;z-index:9;background:var(--bg-app);padding:.75rem 0;margin-bottom:2rem;display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--border-default)}
+.plan-tab{padding:7px 14px;border-radius:8px;font-size:.78rem;font-weight:var(--fw-semibold);cursor:pointer;border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-secondary);transition:all .15s;white-space:nowrap}
+.plan-tab:hover{color:var(--text-primary);border-color:var(--text-secondary)}
+.plan-tab.active{color:#fff}
+.plan-tab.grp-foundation{border-color:var(--accent)}
+.plan-tab.grp-foundation.active{background:var(--accent);border-color:var(--accent);color:#fff}
+.plan-tab.grp-commercial{border-color:var(--success)}
+.plan-tab.grp-commercial.active{background:var(--success);border-color:var(--success);color:#fff}
+.plan-tab.grp-execution{border-color:var(--warning)}
+.plan-tab.grp-execution.active{background:var(--warning);border-color:var(--warning);color:#111}
+
+/* Plan Sections */
+.sec{display:none}
+.sec.active{display:block}
+.sec-hdr{display:flex;align-items:center;gap:12px;margin-bottom:1.5rem}
+.sec-icon{font-size:1.8rem;width:48px;height:48px;display:flex;align-items:center;justify-content:center;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius)}
+.sec-hdr-text h2{font-size:1.3rem;font-weight:var(--fw-bold);color:var(--text-primary)}
+.sec-hdr-text .sec-subtitle{font-size:.82rem;color:var(--text-secondary)}
+
+/* Cards */
+.card{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius);padding:1.25rem;margin-bottom:1rem}
+.card-accent{border-left:4px solid var(--accent)}
+.card-green{border-left:4px solid var(--success)}
+.card-amber{border-left:4px solid var(--warning)}
+.card-red{border-left:4px solid var(--danger)}
+.card h3{font-size:.95rem;font-weight:var(--fw-bold);margin-bottom:.5rem;color:var(--text-primary)}
+.card p{font-size:.9rem;color:var(--text-primary);line-height:1.65}
+.card-label{font-size:.72rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;font-weight:var(--fw-semibold);margin-bottom:.35rem}
+.card-grid{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+.card-grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem}
+
+/* Highlight boxes */
+.hl{background:var(--bg-surface-2);border:1px solid var(--border-default);border-radius:10px;padding:1rem 1.25rem}
+.hl-label{font-size:.72rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;font-weight:var(--fw-semibold);margin-bottom:.25rem}
+.hl-value{font-size:1rem;font-weight:var(--fw-semibold);color:var(--text-primary)}
+.hl-big{font-size:1.4rem;font-weight:800;color:var(--accent)}
+
+/* Metric cards */
+.metric-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem;margin-bottom:1rem}
+.metric-card{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius);padding:1.1rem;text-align:center}
+.metric-card .mc-num{font-size:1.3rem;font-weight:800;color:var(--accent);margin-bottom:.2rem}
+.metric-card .mc-label{font-size:.72rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;font-weight:var(--fw-semibold)}
+
+/* Tables */
+.plan-table{width:100%;border-collapse:collapse;margin-bottom:1rem;border-radius:var(--radius);overflow:hidden}
+.plan-table th{background:var(--bg-surface-2);text-align:left;padding:10px 14px;font-size:.78rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.4px;font-weight:var(--fw-semibold);border-bottom:1px solid var(--border-default)}
+.plan-table td{padding:10px 14px;border-bottom:1px solid var(--border-default);font-size:.9rem;color:var(--text-primary)}
+.plan-table tr:last-child td{border-bottom:none}
+.plan-table tr:hover td{background:var(--accent-soft)}
+
+/* Styled lists */
+.styled-list{list-style:none;padding:0;margin:0}
+.styled-list li{padding:8px 0;padding-left:20px;position:relative;font-size:.9rem;color:var(--text-primary);border-bottom:1px solid var(--border-default)}
+.styled-list li:last-child{border-bottom:none}
+.styled-list li::before{content:'';position:absolute;left:0;top:16px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.styled-list.list-green li::before{background:var(--success)}
+.styled-list.list-amber li::before{background:var(--warning)}
+
+/* Tags */
+.tag{display:inline-block;padding:4px 10px;border-radius:6px;font-size:.75rem;font-weight:var(--fw-semibold);margin:3px 3px 3px 0}
+.tag-accent{background:var(--accent-soft);color:var(--accent)}
+.tag-green{background:var(--success-bg);color:var(--success)}
+.tag-amber{background:var(--warning-bg);color:var(--warning)}
+.tag-blue{background:var(--info-bg);color:var(--info)}
+.tag-purple{background:var(--accent-soft);color:var(--accent)}
+.tag-pink{background:var(--accent-soft);color:var(--accent)}
+.tag-red{background:var(--danger-bg);color:var(--danger)}
+.tags-wrap{display:flex;flex-wrap:wrap;gap:4px}
+
+/* Warning box */
+.warn-box{background:var(--danger-bg);border:1px solid var(--danger-border);border-radius:var(--radius);padding:1rem 1.25rem}
+.warn-box .warn-title{font-size:.82rem;font-weight:var(--fw-bold);color:var(--danger);margin-bottom:.35rem;display:flex;align-items:center;gap:6px}
+.warn-box p{font-size:.88rem;color:var(--text-primary);line-height:1.6}
+
+/* Funnel */
+.funnel{display:flex;flex-direction:column;gap:0;margin-bottom:1rem}
+.funnel-step{display:flex;align-items:center;gap:14px;padding:12px 16px;background:var(--bg-surface);border:1px solid var(--border-default);position:relative}
+.funnel-step:first-child{border-radius:var(--radius) var(--radius) 0 0}
+.funnel-step:last-child{border-radius:0 0 var(--radius) var(--radius)}
+.funnel-step:not(:last-child){border-bottom:none}
+.funnel-num{width:28px;height:28px;border-radius:50%;background:var(--accent);color:#fff;font-size:.75rem;font-weight:var(--fw-bold);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.funnel-text{font-size:.88rem;color:var(--text-primary)}
+
+/* Timeline bar (launch) */
+.timeline-bar{display:grid;grid-template-columns:repeat(4,1fr);gap:0;margin-bottom:1.5rem;border-radius:var(--radius);overflow:hidden}
+.tl-week{padding:10px 14px;text-align:center;font-size:.78rem;font-weight:var(--fw-bold);cursor:pointer;transition:all .15s}
+.tl-week:nth-child(1){background:var(--accent-soft);color:var(--accent)}
+.tl-week:nth-child(2){background:var(--info-bg);color:var(--info)}
+.tl-week:nth-child(3){background:var(--warning-bg);color:var(--warning)}
+.tl-week:nth-child(4){background:var(--success-bg);color:var(--success)}
+
+/* Dashboard section headers */
+.sh{font-size:1.4rem;font-weight:800;margin-bottom:8px;color:var(--accent)}
+.sh-sub{color:var(--text-secondary);font-size:0.9rem;margin-bottom:28px}
+
+/* Dashboard collapsible step blocks */
+.step{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius);margin-bottom:16px;overflow:hidden;transition:border-color .2s}
+.step:hover{border-color:var(--accent)}
+.step-hdr{display:flex;align-items:center;gap:14px;padding:18px 22px;cursor:pointer;user-select:none}
+.step-num{width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.85rem;font-weight:800;flex-shrink:0;border:2px solid var(--border-default);color:var(--text-secondary);background:transparent}
+.step.open .step-num{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.step-title{flex:1;font-weight:var(--fw-bold);font-size:.95rem;color:var(--text-primary)}
+.step-meta{display:flex;gap:8px;align-items:center}
+.step-arrow{color:var(--text-secondary);transition:transform .2s;font-size:.8rem}
+.step.open .step-arrow{transform:rotate(90deg);color:var(--accent)}
+.step-body{display:none;padding:0 22px 22px;border-top:1px solid var(--border-default);font-size:.88rem;line-height:1.7;color:var(--text-primary)}
+.step.open .step-body{display:block}
+.step-body > p:first-child{padding-top:14px}
+
+/* Role-coloured step-num variants */
+.step.step-accent .step-num{border-color:var(--accent);color:var(--accent);background:var(--accent-soft)}
+.step.step-blue .step-num{border-color:var(--info);color:var(--info);background:rgba(59,130,246,0.08)}
+.step.step-amber .step-num{border-color:var(--warning);color:var(--warning);background:var(--warning-bg)}
+.step.step-green .step-num{border-color:var(--success);color:var(--success);background:var(--success-bg)}
+.step.step-pink .step-num{border-color:var(--accent);color:var(--accent);background:rgba(236,72,153,0.08)}
+
+/* Timeline flex bar */
+.tl{display:flex;gap:0;margin:20px 0;border-radius:10px;overflow:hidden}
+.tl-seg{padding:12px 16px;text-align:center;flex:1;color:#fff}
+.tl-seg .tl-lbl{font-size:.72rem;font-weight:800;text-transform:uppercase;letter-spacing:.5px}
+.tl-seg .tl-date{font-size:.78rem;margin-top:3px;opacity:.92}
+
+/* Decision callout */
+.decision{border:1px solid var(--warning);border-radius:10px;padding:14px 18px;margin:16px 0;background:rgba(245,158,11,0.07)}
+.decision h4{color:var(--warning);font-size:.85rem;margin-bottom:6px;font-weight:var(--fw-bold)}
+.decision p{font-size:.88rem;color:var(--text-primary);line-height:1.6}
+
+/* Accent highlight box variant */
+.hl-accent{border-left:4px solid var(--accent);background:var(--bg-surface-2);border-radius:0 10px 10px 0;padding:14px 18px;margin:12px 0}
+.hl-accent .hl-label{font-size:.72rem;color:var(--accent);text-transform:uppercase;letter-spacing:.5px;font-weight:var(--fw-bold);margin-bottom:4px}
+.hl-accent .hl-value{font-size:1rem;font-weight:var(--fw-semibold);color:var(--text-primary);line-height:1.55}
+
+/* Legacy accordion compat (kept for safety) */
+.step-acc{border:1px solid var(--border-default);border-radius:var(--radius);margin-bottom:.75rem;overflow:hidden}
+.step-acc .step-hdr{background:var(--bg-surface)}
+.step-acc.open .step-arrow{transform:rotate(180deg)}
+
+/* Checklist */
+.checklist{list-style:none;padding:0}
+.checklist li{padding:6px 0 6px 28px;position:relative;font-size:.88rem;color:var(--text-primary)}
+.checklist li::before{content:'\2713';position:absolute;left:0;top:6px;width:20px;height:20px;border-radius:50%;background:var(--success-bg);color:var(--success);font-size:.7rem;display:flex;align-items:center;justify-content:center;font-weight:var(--fw-bold)}
+
+/* Milestones timeline */
+.milestones{display:grid;grid-template-columns:repeat(3,1fr);gap:1rem;margin-bottom:1.5rem}
+.ms-card{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius);padding:1.25rem;text-align:center;position:relative}
+.ms-card::before{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:40px;height:4px;border-radius:0 0 4px 4px}
+.ms-card:nth-child(1)::before{background:var(--accent)}
+.ms-card:nth-child(2)::before{background:var(--info)}
+.ms-card:nth-child(3)::before{background:var(--success)}
+.ms-days{font-size:2rem;font-weight:800;color:var(--accent);line-height:1}
+.ms-label{font-size:.72rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;font-weight:var(--fw-semibold);margin:.3rem 0 .6rem}
+.ms-text{font-size:.85rem;color:var(--text-primary);line-height:1.5}
+
+/* Plan footer */
+.plan-ftr{text-align:center;padding:2.5rem 0 1rem;border-top:2px solid var(--border-default);margin-top:3rem}
+.plan-ftr strong{color:var(--accent);font-size:1rem}
+.plan-ftr p{color:var(--text-secondary);font-size:.82rem;margin-top:.3rem}
+
+/* Plan empty */
+.plan-empty{color:var(--text-secondary);font-style:italic;font-size:.9rem;padding:2rem;text-align:center;background:var(--bg-surface);border:1px dashed var(--border-default);border-radius:var(--radius)}
+
+/* Section action buttons */
+.sec-actions{display:flex;gap:8px;margin-bottom:1.25rem;flex-wrap:wrap}
+.sec-action-btn{padding:8px 16px;border-radius:8px;font-size:.82rem;font-weight:var(--fw-semibold);cursor:pointer;border:1px solid var(--border-default);background:var(--bg-surface);color:var(--text-secondary);transition:all .15s;display:flex;align-items:center;gap:6px}
+.sec-action-btn:hover{color:var(--text-primary);border-color:var(--text-secondary)}
+.sec-action-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.sec-action-btn svg{width:14px;height:14px}
+
+/* Discussion panel */
+.disc-panel{display:none;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius);margin-bottom:1.25rem;max-height:400px;overflow-y:auto}
+.disc-panel.active{display:block}
+.disc-panel .disc-header{padding:12px 16px;border-bottom:1px solid var(--border-default);font-size:.82rem;font-weight:var(--fw-semibold);color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;position:sticky;top:0;background:var(--bg-surface);z-index:1}
+.disc-msg{padding:10px 16px;border-bottom:1px solid var(--border-default)}
+.disc-msg:last-child{border-bottom:none}
+.disc-msg-role{font-size:.7rem;font-weight:var(--fw-bold);text-transform:uppercase;letter-spacing:.4px;margin-bottom:3px}
+.disc-msg-role.ai{color:var(--accent)}
+.disc-msg-role.user{color:var(--success)}
+.disc-msg-text{font-size:.85rem;color:var(--text-primary);line-height:1.6}
+.disc-empty{padding:16px;text-align:center;color:var(--text-secondary);font-size:.85rem;font-style:italic}
+
+/* Edit panel */
+.edit-panel{display:none;background:var(--bg-surface);border:1px solid var(--accent);border-radius:var(--radius);margin-bottom:1.25rem;padding:16px}
+.edit-panel.active{display:block}
+.edit-panel-title{font-size:.82rem;font-weight:var(--fw-semibold);color:var(--accent);margin-bottom:8px}
+.edit-panel-hint{font-size:.8rem;color:var(--text-secondary);margin-bottom:10px}
+.edit-input-row{display:flex;gap:8px}
+.edit-input-row textarea{flex:1;padding:10px 14px;background:var(--bg-app);color:var(--text-primary);border:1px solid var(--border-default);border-radius:8px;font-size:.88rem;font-family:inherit;resize:none;min-height:44px;max-height:120px;line-height:1.5}
+.edit-input-row textarea:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-soft)}
+.edit-input-row textarea:disabled{opacity:.5}
+.edit-send-btn{padding:0 16px;border-radius:8px;background:var(--accent);color:#fff;border:none;cursor:pointer;font-weight:var(--fw-semibold);font-size:.85rem;white-space:nowrap;transition:background .15s}
+.edit-send-btn:hover{background:var(--accent)}
+.edit-send-btn:disabled{opacity:.4;cursor:not-allowed}
+.edit-status{font-size:.8rem;color:var(--text-secondary);margin-top:8px;display:none}
+.edit-status.error{color:var(--danger)}
+.edit-status.success{color:var(--success)}
+
+/* ── Reset Modal ── */
+.modal-bg{display:none;position:fixed;inset:0;z-index:2000;background:rgba(28,36,34,0.45);align-items:center;justify-content:center}
+.modal-bg.active{display:flex}
+.modal-box{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:var(--radius);padding:2rem;max-width:400px;width:90%;text-align:center}
+.modal-box h3{margin-bottom:.5rem}
+.modal-box p{color:var(--text-secondary);font-size:.9rem;margin-bottom:1.5rem}
+.modal-btns{display:flex;gap:10px;justify-content:center}
+.modal-btns button{padding:10px 20px;border-radius:8px;font-size:.9rem;font-weight:var(--fw-semibold);cursor:pointer;border:none}
+
+/* ── Print ── */
+@media print{
+  .plan-bar,.plan-tabs,.sec-actions,.disc-panel,.edit-panel{display:none!important}
+  .plan-overlay{position:static!important;overflow:visible!important}
+  body{background:#fff!important;color:#222!important}
+  .plan-wrap{padding:0!important;max-width:100%!important}
+  .plan-hdr h1{-webkit-text-fill-color:#2C6E49!important;color:#2C6E49!important}
+  .sec{display:block!important;page-break-inside:avoid;margin-bottom:2rem}
+  .card,.hl,.hl-accent,.kpi-card,.metric-card,.step,.step-acc,.ms-card,.decision{background:#fff!important;border:1px solid #ddd!important;color:#222!important}
+  .step .step-body{display:block!important}
+  .sh{color:#111!important}
+  .tl-seg{color:#fff!important}
+  .plan-table th{background:#f5f5f5!important}
+  .plan-table td,.plan-table th{border-color:#ddd!important}
+  .card-label,.hl-label,.kpi-label,.mc-label,.sec-subtitle{color:#666!important}
+  .step-body{display:block!important}
+  .plan-ftr{border-color:#ddd!important}
+  .tag{border:1px solid #ccc!important;background:#f5f5f5!important;color:#333!important}
+  .warn-box{background:#fff3f3!important;border-color:#fcc!important}
+  .timeline-bar .tl-week{background:#f0f0f0!important;color:#333!important}
+}
+
+/* ── Responsive ── */
+@media(max-width:768px){
+  .sidebar{display:none}
+  .chat-messages{padding:1rem}
+  .chat-input{padding:.75rem 1rem 1rem}
+  .msg{max-width:90%}
+  .plan-wrap{padding:2rem 1rem}
+  .kpi-row{grid-template-columns:1fr 1fr}
+  .metric-grid{grid-template-columns:1fr 1fr}
+  .card-grid{grid-template-columns:1fr}
+  .milestones{grid-template-columns:1fr}
+  .timeline-bar{grid-template-columns:1fr 1fr}
+}
+
+/* === LAUNCH PM DASHBOARD === */
+.lp-kpi-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.lp-kpi{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:12px;padding:16px;text-align:center}
+.lp-kpi .v{font-size:1.7rem;font-weight:800;color:var(--accent);line-height:1.2}
+.lp-kpi .l{font-size:0.7rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px;margin-top:4px;font-weight:var(--fw-semibold)}
+.lp-kpi .mini-bar{height:4px;background:var(--bg-surface-2);border-radius:2px;margin-top:8px;overflow:hidden}
+.lp-kpi .mini-fill{height:100%;border-radius:2px;transition:width .4s;background:var(--success)}
+.lp-kpi .status-label{font-size:0.72rem;font-weight:var(--fw-bold);margin-top:4px}
+.lp-kpi .status-label.on-track{color:var(--success)}
+.lp-kpi .status-label.at-risk{color:var(--warning)}
+.lp-kpi .status-label.behind{color:var(--danger)}
+
+.lp-filter-bar{display:flex;gap:6px;flex-wrap:wrap;justify-content:center;padding:8px 0;margin-bottom:14px}
+.lp-filter-btn{background:var(--bg-surface-2);border:1px solid var(--border-default);color:var(--text-secondary);padding:5px 14px;border-radius:20px;cursor:pointer;font-size:0.75rem;font-weight:var(--fw-semibold);transition:all .2s}
+.lp-filter-btn:hover{border-color:var(--accent);color:var(--text-primary)}
+.lp-filter-btn.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+
+.lp-workload-bar{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;padding:6px 0;margin-bottom:18px;font-size:0.72rem}
+.lp-workload-item{display:flex;align-items:center;gap:6px;background:var(--bg-surface);border:1px solid var(--border-default);border-radius:20px;padding:5px 12px}
+.lp-workload-item .wl-counts{color:var(--text-secondary)}
+.lp-workload-item .wl-todo{color:var(--text-secondary)}
+.lp-workload-item .wl-ip{color:var(--warning)}
+.lp-workload-item .wl-done{color:var(--success)}
+.lp-workload-item.wl-idle{border-color:var(--danger);background:var(--danger-bg)}
+.lp-wl-idle-badge{font-size:0.62rem;color:var(--danger);font-weight:var(--fw-bold);margin-left:4px}
+.lp-wl-spec-badge{font-size:0.6rem;color:var(--text-secondary);font-style:italic;margin-left:4px}
+
+.lp-week-nav{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;margin-bottom:18px}
+.lp-week-btn{background:var(--bg-surface-2);border:1px solid var(--border-default);color:var(--text-primary);padding:8px 14px;border-radius:8px;cursor:pointer;font-size:0.78rem;font-weight:var(--fw-semibold);text-align:center}
+.lp-week-btn:hover{border-color:var(--accent)}
+.lp-week-btn .wb-prog{font-size:0.65rem;color:var(--text-secondary);margin-top:2px}
+
+.lp-day{background:var(--bg-surface);border:1px solid var(--border-default);border-radius:12px;margin-bottom:14px;padding:16px 18px}
+.lp-day-hdr{display:flex;align-items:center;gap:10px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--border-default)}
+.lp-day-hdr .lp-day-title{font-size:.95rem;font-weight:var(--fw-bold);color:var(--accent);flex:1}
+.lp-day-hdr .lp-day-date{font-size:.72rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.5px}
+.lp-day-badge{display:inline-block;font-size:0.65rem;background:var(--bg-surface-2);color:var(--text-secondary);padding:2px 9px;border-radius:10px;margin-left:6px}
+.lp-day-badge.all-done{background:var(--success-bg);color:var(--success)}
+
+.lp-task{display:flex;align-items:flex-start;gap:12px;padding:12px 0;border-bottom:1px solid var(--border-default)}
+.lp-task:last-child{border-bottom:none}
+.lp-task-who{min-width:120px;flex-shrink:0;display:flex;flex-direction:column;gap:4px}
+.lp-task-what{flex:1;font-size:0.86rem}
+.lp-task-what strong{color:var(--text-primary);font-weight:var(--fw-semibold)}
+.lp-task-what .detail{color:var(--text-secondary);font-size:0.78rem;margin-top:4px;line-height:1.55}
+.lp-owner-switch{font-size:0.7rem;padding:3px 6px;border:1px solid var(--border-default);border-radius:6px;background:var(--bg-surface-2);color:var(--text-primary);cursor:pointer;appearance:none;-webkit-appearance:none}
+.lp-owner-switch:hover,.lp-owner-switch:focus{border-color:var(--accent);outline:none}
+
+.lp-status-btn{display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:20px;cursor:pointer;flex-shrink:0;transition:all .2s;font-size:0.7rem;font-weight:var(--fw-bold);user-select:none;border:2px solid var(--border-default);background:var(--bg-surface-2);color:var(--text-secondary);white-space:nowrap;align-self:flex-start}
+.lp-status-btn:hover{border-color:var(--accent);transform:scale(1.03)}
+.lp-status-btn .status-dot{width:10px;height:10px;border-radius:50%;border:2px solid var(--text-secondary);background:transparent;flex-shrink:0}
+.lp-status-btn.inprogress{border-color:var(--warning);background:var(--warning-bg);color:var(--warning)}
+.lp-status-btn.inprogress .status-dot{border-color:var(--warning);background:var(--warning);animation:lp-pulse 2s ease-in-out infinite}
+.lp-status-btn.done{border-color:var(--success);background:var(--success-bg);color:var(--success)}
+.lp-status-btn.done .status-dot{border-color:var(--success);background:var(--success)}
+.lp-task.inprogress{border-left:3px solid var(--warning);padding-left:10px}
+.lp-task.done{border-left:3px solid var(--success);padding-left:10px}
+.lp-task.done .lp-task-what strong{color:var(--text-secondary);text-decoration:line-through}
+.lp-task.done .lp-task-what .detail{opacity:0.55}
+.lp-task.dimmed{opacity:0.25}
+.lp-task-status-info{font-size:0.66rem;color:var(--text-secondary);margin-top:3px}
+.lp-task-status-info strong{color:var(--warning)}
+.lp-task-status-info.done-info strong{color:var(--success)}
+
+@keyframes lp-pulse{0%,100%{box-shadow:0 0 0 0 var(--warning)}50%{box-shadow:0 0 0 8px rgba(245,158,11,0)}}
+
+.lp-balance-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--warning);color:#000;padding:12px 24px;border-radius:12px;font-size:0.82rem;font-weight:var(--fw-semibold);z-index:1000;box-shadow:var(--shadow-lg);max-width:520px;text-align:center;animation:lp-toast-in .3s ease}
+.lp-balance-toast .toast-close{margin-left:12px;cursor:pointer;font-weight:800;opacity:0.7}
+@keyframes lp-toast-in{from{opacity:0;transform:translateX(-50%) translateY(20px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+
+.lp-tag{display:inline-block;padding:3px 10px;border-radius:20px;font-size:0.68rem;font-weight:var(--fw-bold);white-space:nowrap}
+.lp-tag-c0{background:var(--accent-soft);color:var(--accent)}
+.lp-tag-c1{background:var(--success-bg);color:var(--success)}
+.lp-tag-c2{background:var(--warning-bg);color:var(--warning)}
+.lp-tag-c3{background:var(--info-bg);color:var(--info)}
+.lp-tag-c4{background:var(--accent-soft);color:var(--accent)}
+.lp-tag-c5{background:var(--accent-soft);color:var(--accent)}
+
+.lp-cat-badge{display:inline-block;padding:2px 7px;border-radius:8px;font-size:0.6rem;font-weight:var(--fw-bold);text-transform:uppercase;letter-spacing:.4px;margin-left:6px;background:var(--bg-surface-2);color:var(--text-secondary)}
+.lp-cat-badge.cat-marketing{background:var(--accent-soft);color:var(--accent)}
+.lp-cat-badge.cat-systems{background:var(--info-bg);color:var(--info)}
+.lp-cat-badge.cat-product{background:var(--accent-soft);color:var(--accent)}
+
+.lp-gen-wrap{text-align:center;padding:36px 18px;background:var(--bg-surface);border:1px dashed var(--border-default);border-radius:12px;margin-bottom:18px}
+.lp-gen-wrap h3{font-size:1.05rem;margin-bottom:.5rem;color:var(--text-primary)}
+.lp-gen-wrap p{font-size:.85rem;color:var(--text-secondary);margin-bottom:1rem;max-width:480px;margin-left:auto;margin-right:auto}
+.lp-gen-btn{background:var(--accent);color:#fff;border:none;border-radius:10px;padding:12px 22px;font-size:.92rem;font-weight:var(--fw-bold);cursor:pointer;display:inline-flex;align-items:center;gap:8px}
+.lp-gen-btn:hover{background:var(--accent)}
+.lp-gen-btn:disabled{opacity:.6;cursor:wait}
+.lp-gen-spinner{width:14px;height:14px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:lp-spin .8s linear infinite;display:none}
+.lp-gen-btn.loading .lp-gen-spinner{display:inline-block}
+@keyframes lp-spin{to{transform:rotate(360deg)}}
+.lp-gen-error{color:var(--danger);font-size:.82rem;margin-top:.75rem}
+
+.lp-prog-bar{height:4px;background:var(--bg-surface-2);border-radius:2px;overflow:hidden;margin-top:4px}
+.lp-prog-fill{height:100%;border-radius:2px;background:var(--success);transition:width .4s}
+
+@media(max-width:768px){
+  .lp-kpi-row{grid-template-columns:1fr 1fr}
+  .lp-task{flex-wrap:wrap}
+  .lp-task-who{min-width:0;flex-direction:row;align-items:center}
+}
+@media print{.lp-filter-bar,.lp-status-btn,.lp-workload-bar,.lp-balance-toast,.lp-gen-wrap{display:none}}
+</style>
+</head>
+<body>
+
+<!-- SETUP SCREEN -->
+<div class="setup" id="setupScreen">
+  <div class="setup-card">
+    <h1>Business Launch Plan Builder</h1>
+    <div class="brand">Operations Director</div>
+    <p>An AI coach will guide you through building your complete business plan and 30-day launch action plan. Just answer the questions naturally — the AI does the heavy lifting.</p>
+    <label>AI Provider</label>
+    <select id="cfgProvider" onchange="updateSetupFields()">
+      <option value="anthropic">Claude (Anthropic)</option>
+      <option value="openai">ChatGPT (OpenAI)</option>
+      <option value="custom">Custom Endpoint</option>
+    </select>
+    <div class="hint">Choose which AI service to use for the conversation.</div>
+
+    <div id="cfgKeyGroup">
+      <label>API Key</label>
+      <input type="password" id="cfgKey" placeholder="sk-...">
+      <div class="hint">Your key is stored locally in your browser only. Never shared.</div>
+    </div>
+
+    <div id="cfgEndpointGroup" style="display:none">
+      <label>Endpoint URL</label>
+      <input type="text" id="cfgEndpoint" placeholder="https://your-proxy.com/api/chat">
+      <div class="hint">Custom endpoint that accepts OpenAI-format chat completions.</div>
+    </div>
+
+    <div class="setup-row">
+      <div>
+        <label>Model</label>
+        <select id="cfgModel">
+          <option value="claude-sonnet-4-6">Claude Sonnet</option>
+          <option value="claude-haiku-4-5-20251001">Claude Haiku</option>
+        </select>
+      </div>
+      <div>
+        <label>Your Name</label>
+        <input type="text" id="cfgName" placeholder="e.g. Sarah">
+      </div>
+    </div>
+
+    <button class="setup-btn" id="setupBtn" onclick="startApp()">Start Building Your Plan</button>
+    <div class="setup-error" id="setupError"></div>
+  </div>
+</div>
+
+<!-- MAIN APP -->
+<div class="app" id="app" style="display:none">
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <h2>Operations Director</h2>
+      <span>Business Plan Builder</span>
+    </div>
+    <div class="section-list" id="sectionList"></div>
+    <div class="sidebar-footer">
+      <button class="btn-plan" id="viewPlanBtn" onclick="showPlan()" disabled>View Your Plan</button>
+      <button onclick="showResetModal()">Start Over</button>
+    </div>
+  </aside>
+
+  <div class="chat-area">
+    <div data-sync-bar="os-bplan" style="margin:12px 16px 0"></div>
+    <div class="chat-header">
+      <div>
+        <h1 id="chatPhaseTitle">Getting Started</h1>
+        <div class="phase" id="chatPhaseLabel"></div>
+      </div>
+    </div>
+    <div class="chat-messages" id="chatMessages"></div>
+    <div class="review-panel" id="reviewPanel"></div>
+    <div class="chat-input">
+      <div class="input-row">
+        <textarea id="userInput" placeholder="Type your answer..." rows="1" onkeydown="handleKey(event)" oninput="autoGrow(this)"></textarea>
+        <button class="send-btn" id="sendBtn" onclick="handleSend()">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PLAN OVERLAY -->
+<div class="plan-overlay" id="planOverlay">
+  <div class="plan-bar">
+    <button class="btn-back" onclick="closePlan()">Back to Chat</button>
+    <button class="btn-pdf" onclick="window.print()">Export as PDF</button>
+  </div>
+  <div class="plan-wrap" id="planContent"></div>
+</div>
+
+<!-- RESET MODAL -->
+<div class="modal-bg" id="resetModal">
+  <div class="modal-box">
+    <h3>Start over?</h3>
+    <p>This will clear your entire conversation and plan data. This cannot be undone.</p>
+    <div class="modal-btns">
+      <button style="background:var(--bg-surface-2);color:var(--text-secondary)" onclick="hideResetModal()">Cancel</button>
+      <button style="background:var(--danger);color:#fff" onclick="doReset()">Delete Everything</button>
+    </div>
+  </div>
+</div>
+
+<script src="../../js/sync-bar.js?v=6"></script>
+<!-- Model IDs live once in js/ai-models.js. Never hardcode a model ID below. -->
+<script src="../../js/ai-models.js?v=1"></script>
+<script>
+// ══════════════════════════════════════════════════════════════
+// DEPLOYMENT CONFIG
+// ══════════════════════════════════════════════════════════════
+var PROXY_ENDPOINT = '';
+
+// ══════════════════════════════════════════════════════════════
+// SECTIONS
+// ══════════════════════════════════════════════════════════════
+var SECTIONS = [
+  { id: 'overview', title: 'Business Idea', icon: '\ud83d\udccb' },
+  { id: 'market', title: 'Target Customer', icon: '\ud83c\udfaf' },
+  { id: 'value', title: 'Your Edge', icon: '\u26a1' },
+  { id: 'products', title: 'Products & Pricing', icon: '\ud83d\udce6' },
+  { id: 'revenue', title: 'Revenue Model', icon: '\ud83d\udcb0' },
+  { id: 'costs', title: 'Costs & Investment', icon: '\ud83d\udcca' },
+  { id: 'team', title: 'Team & Resources', icon: '\ud83d\udc65' },
+  { id: 'marketing', title: 'Marketing & Sales', icon: '\ud83d\udce3' },
+  { id: 'launch', title: '30-Day Launch Plan', icon: '\ud83d\ude80' },
+  { id: 'metrics', title: 'Success Metrics', icon: '\ud83c\udfc6' }
+];
+
+var TAB_GROUPS = {
+  overview:'foundation', market:'foundation', value:'foundation',
+  products:'commercial', revenue:'commercial', costs:'commercial',
+  team:'execution', marketing:'execution', launch:'execution', metrics:'execution'
+};
+
+// ══════════════════════════════════════════════════════════════
+// SYSTEM PROMPT
+// ══════════════════════════════════════════════════════════════
+function buildSystemPrompt(userName) {
+  var name = userName || 'there';
+  return 'You are an expert business planning coach working for Operations Director. You are guiding ' + (name !== 'there' ? name : 'a client') + ' through creating their complete business plan and 30-day launch action plan via a friendly, professional conversation.\n\n' +
+'YOUR PERSONALITY:\n' +
+'- Warm, encouraging, but direct and practical\n' +
+'- You ask smart, specific questions that extract maximum useful information\n' +
+'- You challenge unrealistic assumptions gently but honestly\n' +
+'- You reference UK business context where relevant (Companies House, HMRC, etc.)\n' +
+'- You keep responses concise: 2-4 sentences when asking questions\n' +
+'- You celebrate progress and keep momentum going\n\n' +
+'YOUR GOAL:\n' +
+'Extract all the information needed to create a comprehensive business plan by asking questions one at a time. You are not filling out a form. You are having a strategic planning conversation. Make the client feel like they are working with a top-tier business consultant.\n\n' +
+'CONVERSATION PHASES:\n' +
+'Guide the conversation through these phases in order. For each phase, ask 2-4 focused questions (one at a time) before summarising what you have captured. Adapt based on their answers. If they have already covered something, do not ask again.\n\n' +
+'Phase 1 - THE IDEA: What is the business? What problem does it solve? For whom? What stage are they at?\n' +
+'Phase 2 - THE CUSTOMER: Who exactly is the ideal customer? Paint a vivid picture. What are their pain points? How do they currently solve this?\n' +
+'Phase 3 - THE EDGE: What makes this genuinely different? What is the one-line value proposition? Why would someone choose them?\n' +
+'Phase 4 - THE OFFER: What specific products or services? What pricing? What is the revenue model?\n' +
+'Phase 5 - THE NUMBERS: Revenue targets for Year 1 and Year 3? How many customers needed monthly? Average transaction value?\n' +
+'Phase 6 - THE INVESTMENT: Startup costs? Monthly fixed costs? How are they funding it? When do they break even?\n' +
+'Phase 7 - THE TEAM: What is the founder doing day-to-day? Who else is on the team RIGHT NOW (names + what they\'re good at)? Who else is needed? What tools and software? What skills gaps? Always ask for actual team member names and their specialization (marketing / systems / product) so tasks can be assigned to real people.\n' +
+'Phase 8 - THE GROWTH: Which marketing channels? What is the sales process end to end? How will they generate leads?\n' +
+'Phase 9 - THE LAUNCH: Target launch date? Week-by-week plan for first 30 days? What must be done before go-live? Include specific AI tools and prompts they can use for each task.\n' +
+'Phase 10 - THE MEASURES: What does success look like at 30, 90, 365 days? Which KPIs matter most? What is the biggest risk and how will they handle it?\n\n' +
+'AI LAUNCH GUIDANCE:\n' +
+'Throughout the conversation, especially in phases 8 and 9, include specific recommendations for how AI tools can accelerate their launch:\n' +
+'- Suggest specific AI prompts they can use (e.g. for writing website copy, creating social media content, building email sequences, analysing competitors)\n' +
+'- Recommend relevant AI tools (ChatGPT, Claude, Canva AI, etc.) for specific tasks\n' +
+'- Help them understand how AI can cut weeks off their launch timeline\n\n' +
+'CRITICAL RULES:\n' +
+'1. Ask ONE question at a time. Never dump multiple questions in one message.\n' +
+'2. Use their previous answers to make your next question specific and contextual.\n' +
+'3. If an answer is vague, ask a follow-up to get specifics before moving on.\n' +
+'4. After gathering enough information for each phase, write a brief encouraging summary of what you have captured.\n' +
+'5. At the END of your summary message (and ONLY summary messages), include a structured data block in this exact format:\n' +
+'   [PLANDATA:section_id]{...valid JSON...}[/PLANDATA]\n' +
+'6. section_id must be one of: overview, market, value, products, revenue, costs, team, marketing, launch, metrics\n' +
+'7. The data block must be the very last thing in your message. Do not write anything after it.\n' +
+'8. Never explain, reference, or draw attention to the data blocks. They are invisible system markers.\n' +
+'9. After all 10 phases are complete, congratulate them warmly and include [PLAN_COMPLETE] at the very end.\n' +
+'10. Do NOT include [PLANDATA:...] blocks in regular question messages. Only include them when you are summarising and completing a phase.\n\n' +
+'REQUIRED JSON FIELDS PER SECTION:\n' +
+'- overview: {"businessName":"","description":"","problem":"","solution":"","industry":"","stage":""}\n' +
+'- market: {"idealCustomer":"","painPoints":["","",""],"currentAlternative":"","marketSize":"","geographicFocus":""}\n' +
+'- value: {"valueProposition":"","usps":["","",""],"competitiveAdvantage":""}\n' +
+'- products: {"products":[{"name":"","description":"","price":""}],"revenueModel":"","pricingStrategy":""}\n' +
+'- revenue: {"revenueTargetY1":"","revenueTargetY3":"","customersPerMonth":"","avgTransactionValue":"","assumptions":""}\n' +
+'- costs: {"startupCosts":[{"item":"","cost":""}],"monthlyCosts":[{"item":"","cost":""}],"fundingSource":"","breakEven":""}\n' +
+'- team: {"founderRole":"","teamMembers":[{"name":"","role":"","specialization":"marketing|systems|product"}],"keyHires":[""],"tools":[""],"skillsGaps":""}\n' +
+'- marketing: {"channels":[""],"salesProcess":"","leadGenStrategy":"","marketingBudget":""}\n' +
+'- launch: {"launchDate":"YYYY-MM-DD","week1":"","week2":"","week3":"","week4":"","checklist":[""],"weeks":[{"id":"w1","label":"Week 1 \u2014 Foundation","theme":"accent","days":[{"id":"w1d1","date":"YYYY-MM-DD","label":"Mon 15 Apr","title":"Short title","tasks":[{"id":"task-1","title":"Concrete task","detail":"How to do it / what success looks like","category":"marketing|systems|product","suggestedOwner":0}]}]}]}\n' +
+'  IMPORTANT for launch: produce a full weeks[] array of FOUR weeks. Each week has 4-5 working days. Each day has 2-3 tightly scoped tasks. Total ~30-40 tasks across the 30 days. Tailor every task to THIS specific business (e.g. "Write WooCommerce product pages" for e-comm, "Record 3 demo videos" for SaaS, "Set up call booking page" for services). Each task MUST have a category (marketing/systems/product) and a suggestedOwner that is a 0-based index into team.teamMembers picked by matching the task category to the member\'s specialization. Use sequential ids task-1, task-2 ... and day ids w1d1, w1d2, w2d1 etc. Themes per week should be: w1=accent, w2=blue, w3=amber, w4=green.\n' +
+'- metrics: {"milestone30":"","milestone90":"","milestone12":"","kpis":["","",""],"biggestRisk":"","riskMitigation":""}\n\n' +
+'START YOUR FIRST MESSAGE:\n' +
+'Welcome ' + (name !== 'there' ? name : 'them') + ' warmly. Tell them you are going to help them build a complete business plan and 30-day launch action plan through a simple conversation. Make them feel excited about the journey. Then ask your first question: what is their business idea? Keep it to 3-4 sentences total.';
+}
+
+// ══════════════════════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════════════════════
+var config = { provider: 'anthropic', apiKey: '', model: window.AI_MODELS.default, endpoint: '', userName: '' };
+var messages = [];
+var planData = {};
+var completedSections = [];
+var sectionMessages = {}; // Tracks conversation per section: { sectionId: [{role, content}] }
+var lastSectionMsgIndex = 0; // Index of messages at last section capture
+var isLoading = false;
+
+// ══════════════════════════════════════════════════════════════
+// PERSISTENCE
+// ══════════════════════════════════════════════════════════════
+function saveState() {
+  try { localStorage.setItem('od-bplan-v4', JSON.stringify({ config: config, messages: messages, planData: planData, completedSections: completedSections, sectionMessages: sectionMessages, lastSectionMsgIndex: lastSectionMsgIndex })); } catch(e) { console.warn('[bplan] localStorage save failed', e); }
+}
+
+function loadState() {
+  try {
+    var s = JSON.parse(localStorage.getItem('od-bplan-v4'));
+    if (s) {
+      if (s.config) config = s.config;
+      if (s.messages) messages = s.messages;
+      if (s.planData) planData = s.planData;
+      if (s.completedSections) completedSections = s.completedSections;
+      if (s.sectionMessages) sectionMessages = s.sectionMessages;
+      if (s.lastSectionMsgIndex) lastSectionMsgIndex = s.lastSectionMsgIndex;
+      return true;
+    }
+  } catch(e) {/* best-effort: safe fallback */}
+  return false;
+}
+
+// ══════════════════════════════════════════════════════════════
+// SETUP SCREEN
+// ══════════════════════════════════════════════════════════════
+function updateSetupFields() {
+  var provider = document.getElementById('cfgProvider').value;
+  var modelSelect = document.getElementById('cfgModel');
+  var keyGroup = document.getElementById('cfgKeyGroup');
+  var endpointGroup = document.getElementById('cfgEndpointGroup');
+
+  keyGroup.style.display = provider === 'custom' ? 'none' : '';
+  endpointGroup.style.display = provider === 'custom' ? '' : 'none';
+
+  modelSelect.innerHTML = '';
+  if (provider === 'anthropic') {
+    addOption(modelSelect, window.AI_MODELS.default, 'Claude Sonnet');
+    addOption(modelSelect, window.AI_MODELS.light, 'Claude Haiku');
+  } else if (provider === 'openai') {
+    addOption(modelSelect, 'gpt-4o', 'GPT-4o');
+    addOption(modelSelect, 'gpt-4o-mini', 'GPT-4o Mini');
+  } else {
+    addOption(modelSelect, 'default', 'Default');
+  }
+}
+
+function addOption(sel, val, text) {
+  var o = document.createElement('option');
+  o.value = val; o.textContent = text;
+  sel.appendChild(o);
+}
+
+function startApp() {
+  var provider = document.getElementById('cfgProvider').value;
+  var key = document.getElementById('cfgKey').value.trim();
+  var endpoint = document.getElementById('cfgEndpoint').value.trim();
+  var model = document.getElementById('cfgModel').value;
+  var userName = document.getElementById('cfgName').value.trim();
+  var errEl = document.getElementById('setupError');
+
+  if (provider !== 'custom' && !key && !PROXY_ENDPOINT) {
+    errEl.textContent = 'Please enter your API key.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (provider === 'custom' && !endpoint) {
+    errEl.textContent = 'Please enter your endpoint URL.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  config = { provider: provider, apiKey: key, model: model, endpoint: endpoint, userName: userName };
+  // Add a hidden starter message so the API has something to respond to
+  messages = [{ role: 'user', content: 'Hi, I\'m ready to start building my business plan. Please introduce yourself and ask me your first question.' }];
+  saveState();
+  showApp();
+  sendToAI();
+}
+
+function showApp() {
+  document.getElementById('setupScreen').style.display = 'none';
+  document.getElementById('app').style.display = 'flex';
+  renderSections();
+
+  // ── Sync Bar + Health Checks ──
+  // BPlan Builder is a chat-driven plan builder backed by localStorage.
+  // No Airtable, just config + conversation state. Checks confirm the
+  // app's persistence + AI proxy are wired correctly.
+  if (typeof registerSyncBar === 'function') {
+    registerSyncBar('os-bplan', {
+      refreshFn: () => location.reload(),
+      checks: [
+        {
+          name: 'AI provider configured', kind: 'sync', run: () => {
+            if (!config) return { status: 'fail', detail: 'No config object — startApp() may have failed' };
+            if (config.provider === 'custom' && !config.endpoint) return { status: 'fail', detail: 'Custom provider missing endpoint' };
+            if (config.provider !== 'custom' && !config.apiKey && typeof PROXY_ENDPOINT !== 'undefined' && !PROXY_ENDPOINT) {
+              return { status: 'fail', detail: 'No API key and no proxy endpoint' };
+            }
+            return { status: 'pass', detail: `Provider: ${config.provider} · model: ${config.model || 'default'}` };
+          }
+        },
+        {
+          name: 'Conversation state persists', kind: 'sync', run: () => {
+            try {
+              const k = '_bplan_test_' + Date.now();
+              localStorage.setItem(k, '1');
+              localStorage.removeItem(k);
+              return { status: 'pass', detail: `${(messages||[]).length} messages in current session, persisted to localStorage` };
+            } catch (e) { return { status: 'fail', detail: 'localStorage unavailable: ' + e.message }; }
+          }
+        },
+        {
+          name: 'Section list rendered', kind: 'sync', run: () => {
+            const list = document.getElementById('sectionList');
+            const items = list ? list.children.length : 0;
+            if (items === 0) return { status: 'fail', detail: 'sectionList is empty — phase navigation will be missing' };
+            return { status: 'pass', detail: `${items} plan sections in the sidebar` };
+          }
+        },
+        {
+          name: 'AI send pipeline wired', kind: 'automation', run: () => {
+            if (typeof sendToAI !== 'function') return { status: 'fail', detail: 'sendToAI() not loaded' };
+            return { status: 'pass', detail: 'sendToAI() function present — chat input will fire on submit' };
+          }
+        },
+        {
+          name: 'Plan export available', kind: 'automation', run: () => {
+            if (typeof showPlan !== 'function') return { status: 'warn', detail: 'showPlan() not loaded — View Your Plan button disabled' };
+            return { status: 'pass', detail: 'View Your Plan + PDF export both wired' };
+          }
+        },
+      ],
+    });
+    markTabSynced('os-bplan');
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// API COMMUNICATION
+// ══════════════════════════════════════════════════════════════
+function sendToAI() {
+  if (isLoading) return;
+  isLoading = true;
+  updateInputState();
+  showTyping();
+
+  var systemPrompt = buildSystemPrompt(config.userName);
+  var apiMessages = messages.map(function(m) { return { role: m.role, content: m.content }; });
+
+  // Context window management
+  if (apiMessages.length > 50) {
+    var summary = 'Context: Completed sections: ' + completedSections.join(', ') + '. Plan data so far: ' + JSON.stringify(planData);
+    apiMessages = [{ role: 'user', content: summary }, { role: 'assistant', content: 'Understood, continuing from where we left off.' }].concat(apiMessages.slice(-48));
+  }
+
+  var apiCall;
+  if (config.provider === 'anthropic') {
+    apiCall = callAnthropic(systemPrompt, apiMessages);
+  } else if (config.provider === 'openai') {
+    apiCall = callOpenAI(systemPrompt, apiMessages);
+  } else {
+    apiCall = callCustom(systemPrompt, apiMessages);
+  }
+
+  apiCall.then(function(fullText) {
+    hideTyping();
+
+    var result = extractPlanDataFromText(fullText);
+    var planComplete = fullText.indexOf('[PLAN_COMPLETE]') !== -1;
+    var displayText = result.cleanText.replace('[PLAN_COMPLETE]', '').trim();
+
+    messages.push({ role: 'assistant', content: fullText });
+    addMessageBubble('assistant', displayText);
+
+    if (result.extractedData) {
+      for (var sectionId in result.extractedData) {
+        planData[sectionId] = result.extractedData[sectionId];
+        if (completedSections.indexOf(sectionId) === -1) {
+          completedSections.push(sectionId);
+        }
+        // Capture the conversation messages that belong to this section
+        var secMsgs = [];
+        for (var mi = lastSectionMsgIndex; mi < messages.length; mi++) {
+          var m = messages[mi];
+          var cleanResult = extractPlanDataFromText(m.content);
+          var cleanContent = cleanResult.cleanText.replace('[PLAN_COMPLETE]', '').trim();
+          if (cleanContent) secMsgs.push({ role: m.role, content: cleanContent });
+        }
+        sectionMessages[sectionId] = secMsgs;
+        lastSectionMsgIndex = messages.length;
+        showSectionCaptured(sectionId);
+      }
+    }
+
+    if (planComplete) showPlanCompleteMessage();
+    renderSections();
+    saveState();
+    isLoading = false;
+    updateInputState();
+    document.getElementById('userInput').focus();
+
+  }).catch(function(err) {
+    hideTyping();
+    isLoading = false;
+    updateInputState();
+    // If this was the very first message (only the hidden starter), go back to setup
+    if (messages.length <= 1) {
+      localStorage.removeItem('od-bplan-v4');
+      document.getElementById('app').style.display = 'none';
+      document.getElementById('setupScreen').style.display = 'flex';
+      var errEl = document.getElementById('setupError');
+      errEl.textContent = 'Could not connect to AI: ' + err.message;
+      errEl.style.display = 'block';
+    } else {
+      addMessageBubble('system', 'Something went wrong: ' + err.message + '. Try sending your message again.');
+    }
+  });
+}
+
+function callAnthropic(systemPrompt, apiMessages) {
+  var proxyUrl = PROXY_ENDPOINT || '/api/chat';
+  return fetch(proxyUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider: 'anthropic',
+      apiKey: config.apiKey,
+      model: config.model,
+      system: systemPrompt,
+      messages: apiMessages
+    })
+  }).then(function(resp) {
+    if (!resp.ok) return resp.text().then(function(t) { throw new Error('Server error ' + resp.status + ': ' + t.substring(0, 200)); });
+    return resp.json();
+  }).then(function(data) {
+    if (data.error) throw new Error(data.error);
+    if (data.text) return data.text;
+    throw new Error('Unexpected response format');
+  });
+}
+
+function callOpenAI(systemPrompt, apiMessages) {
+  var proxyUrl = PROXY_ENDPOINT || '/api/chat';
+  return fetch(proxyUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider: 'openai',
+      apiKey: config.apiKey,
+      model: config.model,
+      system: systemPrompt,
+      messages: apiMessages
+    })
+  }).then(function(resp) {
+    if (!resp.ok) return resp.text().then(function(t) { throw new Error('Server error ' + resp.status + ': ' + t.substring(0, 200)); });
+    return resp.json();
+  }).then(function(data) {
+    if (data.error) throw new Error(data.error);
+    if (data.text) return data.text;
+    throw new Error('Unexpected response format');
+  });
+}
+
+function callCustom(systemPrompt, apiMessages) {
+  var proxyUrl = PROXY_ENDPOINT || '/api/chat';
+  return fetch(proxyUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider: 'custom',
+      endpoint: config.endpoint,
+      apiKey: config.apiKey,
+      model: config.model,
+      system: systemPrompt,
+      messages: apiMessages
+    })
+  }).then(function(resp) {
+    if (!resp.ok) return resp.text().then(function(t) { throw new Error('Server error ' + resp.status + ': ' + t.substring(0, 200)); });
+    return resp.json();
+  }).then(function(data) {
+    if (data.error) throw new Error(data.error);
+    if (data.text) return data.text;
+    throw new Error('Unexpected response format');
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// PLAN DATA EXTRACTION
+// ══════════════════════════════════════════════════════════════
+function extractPlanDataFromText(text) {
+  var extracted = {};
+  var cleanText = text;
+  var match;
+
+  // [PLANDATA:sectionId]{...}[/PLANDATA]
+  var regex = /\[PLANDATA:(\w+)\]([\s\S]*?)\[\/PLANDATA\]/g;
+  while ((match = regex.exec(text)) !== null) {
+    try { extracted[match[1]] = JSON.parse(match[2].trim()); } catch(e) {/* best-effort: safe fallback */}
+    cleanText = cleanText.replace(match[0], '');
+  }
+
+  // <plan_data section="id">...</plan_data> fallback
+  var xmlRegex = /<plan_data section="(\w+)">([\s\S]*?)<\/plan_data>/g;
+  while ((match = xmlRegex.exec(text)) !== null) {
+    try { extracted[match[1]] = JSON.parse(match[2].trim()); } catch(e) {/* best-effort: safe fallback */}
+    cleanText = cleanText.replace(match[0], '');
+  }
+
+  return { cleanText: cleanText.trim(), extractedData: Object.keys(extracted).length > 0 ? extracted : null };
+}
+
+// ══════════════════════════════════════════════════════════════
+// CHAT UI
+// ══════════════════════════════════════════════════════════════
+function addMessageBubble(role, content) {
+  var container = document.getElementById('chatMessages');
+  var div = document.createElement('div');
+  div.className = 'msg msg-' + (role === 'user' ? 'user' : 'ai');
+
+  var label = document.createElement('div');
+  label.className = 'msg-label';
+  label.textContent = role === 'user' ? (config.userName || 'You') : 'AI Coach';
+
+  var bubble = document.createElement('div');
+  bubble.className = 'msg-bubble';
+  bubble.innerHTML = formatMessage(content);
+
+  div.appendChild(label);
+  div.appendChild(bubble);
+  container.appendChild(div);
+  scrollToBottom();
+}
+
+function showSectionCaptured(sectionId) {
+  var section = null;
+  for (var i = 0; i < SECTIONS.length; i++) { if (SECTIONS[i].id === sectionId) { section = SECTIONS[i]; break; } }
+  if (!section) return;
+
+  var container = document.getElementById('chatMessages');
+  var div = document.createElement('div');
+  div.className = 'section-captured';
+  div.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>' +
+    '<span>' + section.title + ' captured in your plan</span>';
+  container.appendChild(div);
+  scrollToBottom();
+}
+
+function showPlanCompleteMessage() {
+  var container = document.getElementById('chatMessages');
+  var div = document.createElement('div');
+  div.className = 'section-captured';
+  div.style.cssText = 'border-color:var(--accent);background:var(--accent-soft);color:var(--accent)';
+  div.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>' +
+    '<span>Your business plan is complete! Click "View Your Plan" to see it.</span>';
+  container.appendChild(div);
+  scrollToBottom();
+  document.getElementById('viewPlanBtn').disabled = false;
+}
+
+function showTyping() {
+  if (document.getElementById('typingIndicator')) return;
+  var container = document.getElementById('chatMessages');
+  var div = document.createElement('div');
+  div.className = 'msg msg-ai typing';
+  div.id = 'typingIndicator';
+  div.innerHTML = '<div class="msg-label">AI Coach</div><div class="msg-bubble"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>';
+  container.appendChild(div);
+  scrollToBottom();
+}
+
+function hideTyping() {
+  var el = document.getElementById('typingIndicator');
+  if (el) el.remove();
+}
+
+function formatMessage(text) {
+  if (!text) return '';
+  var html = escapeHtml(text);
+  html = html.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+  var parts = html.split(/\n\n+/);
+  var result = '';
+  for (var i = 0; i < parts.length; i++) {
+    var part = parts[i].trim();
+    if (!part) continue;
+    var lines = part.split('\n');
+    var isList = lines.length > 1 && lines.every(function(l) { return /^[-\u2022]\s/.test(l.trim()) || /^\d+[\.\)]\s/.test(l.trim()); });
+    if (isList) {
+      result += '<ul>';
+      for (var j = 0; j < lines.length; j++) {
+        var li = lines[j].trim().replace(/^[-\u2022]\s*/, '').replace(/^\d+[\.\)]\s*/, '');
+        if (li) result += '<li>' + li + '</li>';
+      }
+      result += '</ul>';
+    } else {
+      result += '<p>' + part.replace(/\n/g, '<br>') + '</p>';
+    }
+  }
+  return result || '<p>' + html + '</p>';
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function scrollToBottom() {
+  var el = document.getElementById('chatMessages');
+  setTimeout(function() { el.scrollTop = el.scrollHeight; }, 50);
+}
+
+function handleSend() {
+  var input = document.getElementById('userInput');
+  var text = input.value.trim();
+  if (!text || isLoading) return;
+  messages.push({ role: 'user', content: text });
+  addMessageBubble('user', text);
+  input.value = '';
+  input.style.height = 'auto';
+  saveState();
+  sendToAI();
+}
+
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+}
+
+function autoGrow(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 150) + 'px';
+}
+
+function updateInputState() {
+  document.getElementById('userInput').disabled = isLoading;
+  document.getElementById('sendBtn').disabled = isLoading;
+}
+
+// ══════════════════════════════════════════════════════════════
+// SIDEBAR
+// ══════════════════════════════════════════════════════════════
+var reviewingSection = null; // Track which section is being reviewed in chat
+
+function renderSections() {
+  var list = document.getElementById('sectionList');
+  if (!list) return;
+  var currentIdx = completedSections.length;
+
+  list.innerHTML = SECTIONS.map(function(s, i) {
+    var isDone = completedSections.indexOf(s.id) > -1;
+    var isCurrent = i === currentIdx && !isDone;
+    var isReviewing = reviewingSection === s.id;
+    var cls = isReviewing ? 'reviewing' : (isDone ? 'done' : (isCurrent ? 'active' : ''));
+    var onclick = isDone ? ' onclick="openSectionReview(\'' + s.id + '\')"' : '';
+    return '<div class="section-item ' + cls + '"' + onclick + '><div class="section-dot">' +
+      (isDone ? '&#10003;' : (i + 1)) + '</div><span>' + s.title + '</span></div>';
+  }).join('');
+
+  if (currentIdx < SECTIONS.length) {
+    document.getElementById('chatPhaseTitle').textContent = SECTIONS[currentIdx].title;
+    document.getElementById('chatPhaseLabel').textContent = 'Phase ' + (currentIdx + 1) + ' of ' + SECTIONS.length;
+  } else {
+    document.getElementById('chatPhaseTitle').textContent = 'Plan Complete';
+    document.getElementById('chatPhaseLabel').textContent = 'All sections covered';
+  }
+  document.getElementById('viewPlanBtn').disabled = completedSections.length === 0;
+}
+
+// ══════════════════════════════════════════════════════════════
+// SECTION REVIEW IN CHAT AREA
+// ══════════════════════════════════════════════════════════════
+function openSectionReview(sectionId) {
+  var section = null;
+  var sectionIdx = -1;
+  for (var i = 0; i < SECTIONS.length; i++) {
+    if (SECTIONS[i].id === sectionId) { section = SECTIONS[i]; sectionIdx = i; break; }
+  }
+  if (!section || !planData[sectionId]) return;
+
+  reviewingSection = sectionId;
+  renderSections();
+
+  // Hide chat messages and show review panel
+  document.getElementById('chatMessages').style.display = 'none';
+  var panel = document.getElementById('reviewPanel');
+  panel.classList.add('active');
+
+  // Update chat header
+  document.getElementById('chatPhaseTitle').textContent = 'Reviewing: ' + section.title;
+  document.getElementById('chatPhaseLabel').textContent = 'Click a completed section to review it, or press Back to return to chat';
+
+  var h = '';
+
+  // Header with back button
+  h += '<div class="rp-header">';
+  h += '<div class="rp-icon">' + section.icon + '</div>';
+  h += '<div><div class="rp-title">' + escapeHtml(section.title) + '</div>';
+  h += '<div class="rp-subtitle">Review the discussion and data, or make changes</div></div>';
+  h += '<button class="rp-back" onclick="closeSectionReview()">&#8592; Back to Chat</button>';
+  h += '</div>';
+
+  // Current data summary
+  h += '<div class="rp-section-label">Current Data</div>';
+  var data = planData[sectionId];
+  for (var key in data) {
+    if (!data.hasOwnProperty(key)) continue;
+    var val = data[key];
+    var label = key.replace(/([A-Z])/g, ' $1').replace(/^./, function(s) { return s.toUpperCase(); });
+    h += '<div class="rp-data-card">';
+    h += '<div class="rp-data-label">' + escapeHtml(label) + '</div>';
+    if (Array.isArray(val)) {
+      if (val.length > 0 && typeof val[0] === 'object') {
+        // Array of objects (products, costs) — show as mini list
+        h += '<div class="rp-data-value">';
+        for (var vi = 0; vi < val.length; vi++) {
+          var parts = [];
+          for (var vk in val[vi]) { if (val[vi].hasOwnProperty(vk)) parts.push(val[vi][vk]); }
+          h += '\u2022 ' + escapeHtml(parts.join(' — ')) + '<br>';
+        }
+        h += '</div>';
+      } else {
+        h += '<div class="rp-data-value">' + val.map(function(v) { return '\u2022 ' + escapeHtml(String(v)); }).join('<br>') + '</div>';
+      }
+    } else {
+      h += '<div class="rp-data-value">' + escapeHtml(String(val)) + '</div>';
+    }
+    h += '</div>';
+  }
+
+  // Discussion
+  h += '<div class="rp-section-label">Discussion</div>';
+  var msgs = sectionMessages[sectionId];
+  h += '<div class="rp-disc-wrap">';
+  if (msgs && msgs.length > 0) {
+    for (var mi = 0; mi < msgs.length; mi++) {
+      var m = msgs[mi];
+      if (m.role === 'user' && m.content === 'Hi, I\'m ready to start building my business plan. Please introduce yourself and ask me your first question.') continue;
+      h += '<div class="rp-disc-msg">';
+      h += '<div class="rp-disc-role ' + (m.role === 'user' ? 'user' : 'ai') + '">' + (m.role === 'user' ? (config.userName || 'You') : 'AI Coach') + '</div>';
+      h += '<div class="rp-disc-text">' + formatMessage(m.content) + '</div>';
+      h += '</div>';
+    }
+  } else {
+    h += '<div class="rp-disc-empty">No conversation recorded for this section.</div>';
+  }
+  h += '</div>';
+
+  // Edit section
+  h += '<div class="rp-section-label">Make Changes</div>';
+  h += '<div class="rp-edit-wrap">';
+  h += '<div class="rp-edit-title">Edit this section</div>';
+  h += '<div class="rp-edit-hint">Tell the AI what you want to change, e.g. "Change the price of Full Groom to £75" or "Add a new pain point about parking"</div>';
+  h += '<div class="rp-edit-row">';
+  h += '<textarea id="rpEditInput-' + sectionId + '" placeholder="What would you like to change?" rows="2" onkeydown="handleRpEditKey(event,\'' + sectionId + '\')"></textarea>';
+  h += '<button class="rp-edit-btn" id="rpEditBtn-' + sectionId + '" onclick="sendRpSectionEdit(\'' + sectionId + '\')">Update</button>';
+  h += '</div>';
+  h += '<div class="rp-edit-status" id="rpEditStatus-' + sectionId + '"></div>';
+  h += '</div>';
+
+  panel.innerHTML = h;
+}
+
+function closeSectionReview() {
+  reviewingSection = null;
+  document.getElementById('chatMessages').style.display = 'flex';
+  var panel = document.getElementById('reviewPanel');
+  panel.classList.remove('active');
+  panel.innerHTML = '';
+  renderSections();
+}
+
+function handleRpEditKey(e, sectionId) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendRpSectionEdit(sectionId); }
+}
+
+function sendRpSectionEdit(sectionId) {
+  var input = document.getElementById('rpEditInput-' + sectionId);
+  var btn = document.getElementById('rpEditBtn-' + sectionId);
+  var status = document.getElementById('rpEditStatus-' + sectionId);
+  if (!input || !btn) return;
+
+  var userRequest = input.value.trim();
+  if (!userRequest) return;
+
+  input.disabled = true;
+  btn.disabled = true;
+  status.textContent = 'Updating section...';
+  status.className = 'rp-edit-status';
+  status.style.display = 'block';
+
+  var sectionInfo = null;
+  for (var i = 0; i < SECTIONS.length; i++) {
+    if (SECTIONS[i].id === sectionId) { sectionInfo = SECTIONS[i]; break; }
+  }
+
+  var editSystemPrompt = 'You are a business plan editor. The user has already completed a business plan and wants to amend one section.\n\n' +
+    'CURRENT DATA for the "' + (sectionInfo ? sectionInfo.title : sectionId) + '" section:\n' +
+    JSON.stringify(planData[sectionId], null, 2) + '\n\n' +
+    'The user wants to make changes. Apply their requested changes to the data and output the COMPLETE updated section data.\n\n' +
+    'CRITICAL RULES:\n' +
+    '1. Keep all existing data that the user has NOT asked to change.\n' +
+    '2. Apply only the changes they requested.\n' +
+    '3. Output your response as a brief friendly confirmation (1-2 sentences) of what you changed, followed by the updated data block.\n' +
+    '4. The data block MUST be in this exact format at the END of your message:\n' +
+    '   [PLANDATA:' + sectionId + ']{...complete JSON...}[/PLANDATA]\n' +
+    '5. The JSON must include ALL fields for this section, not just the changed ones.\n';
+
+  var proxyUrl = PROXY_ENDPOINT || '/api/chat';
+  fetch(proxyUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider: config.provider,
+      apiKey: config.apiKey,
+      model: config.model,
+      system: editSystemPrompt,
+      messages: [{ role: 'user', content: userRequest }],
+      endpoint: config.endpoint
+    })
+  }).then(function(resp) {
+    if (!resp.ok) return resp.text().then(function(t) { throw new Error('Server error ' + resp.status); });
+    return resp.json();
+  }).then(function(data) {
+    if (data.error) throw new Error(data.error);
+    var fullText = data.text;
+    var result = extractPlanDataFromText(fullText);
+    if (result.extractedData && result.extractedData[sectionId]) {
+      planData[sectionId] = result.extractedData[sectionId];
+      if (!sectionMessages[sectionId]) sectionMessages[sectionId] = [];
+      sectionMessages[sectionId].push({ role: 'user', content: '\u270f\ufe0f Edit: ' + userRequest });
+      sectionMessages[sectionId].push({ role: 'assistant', content: result.cleanText });
+      saveState();
+      status.textContent = '\u2713 Updated! Refreshing...';
+      status.className = 'rp-edit-status success';
+      status.style.display = 'block';
+      input.value = '';
+      setTimeout(function() { openSectionReview(sectionId); }, 800);
+    } else {
+      throw new Error('AI did not return updated data. Try rephrasing.');
+    }
+  }).catch(function(err) {
+    status.textContent = 'Error: ' + err.message;
+    status.className = 'rp-edit-status error';
+    status.style.display = 'block';
+    input.disabled = false;
+    btn.disabled = false;
+  });
+}
+
+// ══════════════════════════════════════════════════════════════
+// PLAN VIEW — RICH LAYOUT
+// ══════════════════════════════════════════════════════════════
+function showPlan() {
+  var wrap = document.getElementById('planContent');
+  var d = planData;
+  var bName = (d.overview && d.overview.businessName) || 'Your Business Plan';
+  var dateStr = new Date().toLocaleDateString('en-GB', { day:'numeric', month:'long', year:'numeric' });
+
+  var h = '';
+
+  // Header
+  h += '<div class="plan-hdr">';
+  h += '<h1>' + escapeHtml(bName) + '</h1>';
+  h += '<div class="plan-sub">Business Plan &amp; 30-Day Launch Action Plan</div>';
+  h += '<div class="plan-date">Generated ' + dateStr + '</div>';
+  h += '</div>';
+
+  // KPI Row
+  var kpiRevY1 = (d.revenue && d.revenue.revenueTargetY1) || '\u2014';
+  var kpiBE = (d.costs && d.costs.breakEven) || '\u2014';
+  var kpiCust = (d.revenue && d.revenue.customersPerMonth) || '\u2014';
+  var kpiLaunch = (d.launch && d.launch.launchDate) || '\u2014';
+  h += '<div class="kpi-row">';
+  h += kpiCard(kpiRevY1, 'Revenue Target Y1');
+  h += kpiCard(kpiBE, 'Break-Even');
+  h += kpiCard(kpiCust, 'Monthly Customers');
+  h += kpiCard(kpiLaunch, 'Launch Date');
+  h += '</div>';
+
+  // Tab Navigation
+  h += '<div class="plan-tabs" id="planTabs">';
+  for (var t = 0; t < SECTIONS.length; t++) {
+    var s = SECTIONS[t];
+    var grp = TAB_GROUPS[s.id];
+    var grpCls = grp === 'foundation' ? 'grp-foundation' : (grp === 'commercial' ? 'grp-commercial' : 'grp-execution');
+    var activeCls = t === 0 ? ' active' : '';
+    h += '<div class="plan-tab ' + grpCls + activeCls + '" onclick="showPlanTab(\'' + s.id + '\',this)">' + s.icon + ' ' + escapeHtml(s.title) + '</div>';
+  }
+  h += '</div>';
+
+  // Sections
+  h += renderOverviewSection(d.overview);
+  h += renderMarketSection(d.market);
+  h += renderValueSection(d.value);
+  h += renderProductsSection(d.products);
+  h += renderRevenueSection(d.revenue);
+  h += renderCostsSection(d.costs);
+  h += renderTeamSection(d.team);
+  h += renderMarketingSection(d.marketing);
+  h += renderLaunchSection(d.launch);
+  h += renderMetricsSection(d.metrics);
+
+  // Footer
+  h += '<div class="plan-ftr"><strong>Powered by Operations Director</strong><p>operationsdirector.co.uk</p></div>';
+
+  wrap.innerHTML = h;
+  document.getElementById('planOverlay').classList.add('active');
+}
+
+function kpiCard(num, label) {
+  return '<div class="kpi-card"><div class="kpi-num">' + escapeHtml(String(num)) + '</div><div class="kpi-label">' + escapeHtml(label) + '</div></div>';
+}
+
+function secStart(id, idx) {
+  var s = SECTIONS[idx];
+  var activeCls = idx === 0 ? ' active' : '';
+  var subtitles = {
+    overview:'The big picture of your business',
+    market:'Who you serve and why they need you',
+    value:'What sets you apart from the competition',
+    products:'Your offerings and how you price them',
+    revenue:'The money model and growth targets',
+    costs:'Investment needed and financial runway',
+    team:'People, tools, and capabilities',
+    marketing:'How you will reach and convert customers',
+    launch:'Your first 30 days, week by week',
+    metrics:'How you will measure and manage success'
+  };
+  var h = '<div class="sec' + activeCls + '" id="sec-' + id + '">';
+  h += '<div class="sec-hdr"><div class="sec-icon">' + s.icon + '</div><div class="sec-hdr-text"><div class="sh">' + escapeHtml(s.title) + '</div><div class="sh-sub">' + (subtitles[id] || '') + '</div></div></div>';
+
+  // Action buttons — View Discussion + Edit Section
+  h += '<div class="sec-actions">';
+  h += '<button class="sec-action-btn" onclick="toggleDiscussion(\'' + id + '\',this)">';
+  h += '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>';
+  h += 'View Discussion</button>';
+  h += '<button class="sec-action-btn" onclick="toggleEditPanel(\'' + id + '\',this)">';
+  h += '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
+  h += 'Edit Section</button>';
+  h += '</div>';
+
+  // Discussion panel (hidden by default)
+  h += '<div class="disc-panel" id="disc-' + id + '">';
+  h += '<div class="disc-header">Conversation for this section</div>';
+  var msgs = sectionMessages[id];
+  if (msgs && msgs.length > 0) {
+    for (var mi = 0; mi < msgs.length; mi++) {
+      var m = msgs[mi];
+      if (m.role === 'user' && m.content === 'Hi, I\'m ready to start building my business plan. Please introduce yourself and ask me your first question.') continue;
+      h += '<div class="disc-msg">';
+      h += '<div class="disc-msg-role ' + (m.role === 'user' ? 'user' : 'ai') + '">' + (m.role === 'user' ? (config.userName || 'You') : 'AI Coach') + '</div>';
+      h += '<div class="disc-msg-text">' + formatMessage(m.content) + '</div>';
+      h += '</div>';
+    }
+  } else {
+    h += '<div class="disc-empty">No conversation recorded for this section yet.</div>';
+  }
+  h += '</div>';
+
+  // Edit panel (hidden by default)
+  h += '<div class="edit-panel" id="edit-' + id + '">';
+  h += '<div class="edit-panel-title">Edit this section</div>';
+  h += '<div class="edit-panel-hint">Tell the AI what you want to change. For example: "Change the launch date to June 1st" or "Add another product called Premium Coaching at £150"</div>';
+  h += '<div class="edit-input-row">';
+  h += '<textarea id="editInput-' + id + '" placeholder="What would you like to change?" rows="2" onkeydown="handleEditKey(event,\'' + id + '\')"></textarea>';
+  h += '<button class="edit-send-btn" id="editBtn-' + id + '" onclick="sendSectionEdit(\'' + id + '\')">Update</button>';
+  h += '</div>';
+  h += '<div class="edit-status" id="editStatus-' + id + '"></div>';
+  h += '</div>';
+
+  return h;
+}
+
+function emptySection(id, idx) {
+  return secStart(id, idx) + '<div class="plan-empty">Not yet discussed — continue your conversation to fill this section.</div></div>';
+}
+
+// Dashboard-style collapsible step helper
+function stepBlock(num, title, bodyHtml, opts) {
+  opts = opts || {};
+  var cls = 'step' + (opts.color ? ' step-' + opts.color : '') + (opts.open ? ' open' : '');
+  var meta = opts.meta ? '<div class="step-meta">' + opts.meta + '</div>' : '';
+  var h = '<div class="' + cls + '">';
+  h += '<div class="step-hdr" onclick="toggleStep(this.parentElement)">';
+  h += '<div class="step-num">' + num + '</div>';
+  h += '<div class="step-title">' + escapeHtml(title) + '</div>';
+  h += meta;
+  h += '<div class="step-arrow">\u25b6</div>';
+  h += '</div>';
+  h += '<div class="step-body">' + bodyHtml + '</div>';
+  h += '</div>';
+  return h;
+}
+
+// Highlight helper with accent left-border (launch-plan hl style)
+function hlAccent(label, value) {
+  return '<div class="hl-accent"><div class="hl-label">' + escapeHtml(label) + '</div><div class="hl-value">' + escapeHtml(value || '\u2014') + '</div></div>';
+}
+
+function decisionBox(title, body) {
+  return '<div class="decision"><h4>' + escapeHtml(title) + '</h4><p>' + escapeHtml(body) + '</p></div>';
+}
+
+function renderOverviewSection(d) {
+  var idx = 0;
+  if (!d) return emptySection('overview', idx);
+  var h = secStart('overview', idx);
+  // Business name prominent + elevator pitch as hl-accent
+  h += '<div class="card card-accent"><div class="card-label">Business Name</div><h3 style="font-size:1.3rem;color:var(--accent)">' + escapeHtml(d.businessName || '\u2014') + '</h3>';
+  if (d.description) h += '<p style="margin-top:.5rem">' + escapeHtml(d.description) + '</p>';
+  h += '</div>';
+  if (d.description) h += hlAccent('Elevator Pitch', d.description);
+  // Quick stats row
+  h += '<div class="kpi-row" style="grid-template-columns:repeat(2,1fr);margin-top:1rem">';
+  h += '<div class="kpi-card"><div class="kpi-num">' + escapeHtml(d.industry || '\u2014') + '</div><div class="kpi-label">Industry</div></div>';
+  h += '<div class="kpi-card"><div class="kpi-num">' + escapeHtml(d.stage || '\u2014') + '</div><div class="kpi-label">Stage</div></div>';
+  h += '</div>';
+  // Problem / Solution side-by-side using hl-accent
+  h += '<div class="card-grid" style="margin-top:1rem">';
+  h += hlAccent('Problem', d.problem);
+  h += hlAccent('Solution', d.solution);
+  h += '</div>';
+  h += '</div>';
+  return h;
+}
+
+function renderMarketSection(d) {
+  var idx = 1;
+  if (!d) return emptySection('market', idx);
+  var h = secStart('market', idx);
+  // Step 1: Ideal Customer
+  h += stepBlock(1, 'Ideal Customer', '<p>' + escapeHtml(d.idealCustomer || '\u2014') + '</p>' + (d.currentAlternative ? '<div class="hl-accent" style="margin-top:12px"><div class="hl-label">Currently They Use</div><div class="hl-value">' + escapeHtml(d.currentAlternative) + '</div></div>' : ''), { color:'accent', open:true });
+  // Step 2: Pain Points
+  var ppBody = '';
+  if (d.painPoints && d.painPoints.length > 0) {
+    ppBody = '<ul class="styled-list list-amber">';
+    for (var i = 0; i < d.painPoints.length; i++) {
+      if (d.painPoints[i]) ppBody += '<li>' + escapeHtml(d.painPoints[i]) + '</li>';
+    }
+    ppBody += '</ul>';
+  } else {
+    ppBody = '<p>\u2014</p>';
+  }
+  h += stepBlock(2, 'Pain Points', ppBody, { color:'amber' });
+  // Step 3: Market Size & Geography
+  var msBody = '<div class="card-grid">' + hlAccent('Market Size', d.marketSize) + hlAccent('Geographic Focus', d.geographicFocus) + '</div>';
+  h += stepBlock(3, 'Market Size & Geography', msBody, { color:'blue' });
+  h += '</div>';
+  return h;
+}
+
+function renderValueSection(d) {
+  var idx = 2;
+  if (!d) return emptySection('value', idx);
+  var h = secStart('value', idx);
+  // USP as accent highlight
+  h += hlAccent('Value Proposition', d.valueProposition);
+  // USPs as grid of feature cards
+  if (d.usps && d.usps.length > 0) {
+    h += '<div class="card-label" style="margin:1rem 0 .5rem">Unique Selling Points</div>';
+    h += '<div class="card-grid' + (d.usps.length >= 3 ? '-3' : '') + '">';
+    for (var i = 0; i < d.usps.length; i++) {
+      if (d.usps[i]) h += '<div class="card"><p>' + escapeHtml(d.usps[i]) + '</p></div>';
+    }
+    h += '</div>';
+  }
+  // Competitive advantage inside step
+  if (d.competitiveAdvantage) {
+    h += stepBlock(1, 'Competitive Advantage', '<p>' + escapeHtml(d.competitiveAdvantage) + '</p>', { color:'accent', open:true });
+  }
+  h += '</div>';
+  return h;
+}
+
+function renderProductsSection(d) {
+  var idx = 3;
+  if (!d) return emptySection('products', idx);
+  var h = secStart('products', idx);
+  // Products table inside step
+  var prodBody = '';
+  if (d.products && d.products.length > 0) {
+    prodBody += '<table class="plan-table"><tr><th>Product</th><th>Description</th><th>Price</th></tr>';
+    for (var i = 0; i < d.products.length; i++) {
+      var p = d.products[i];
+      var price = p.price || '\u2014';
+      prodBody += '<tr><td><strong>' + escapeHtml(p.name || '\u2014') + '</strong></td><td>' + escapeHtml(p.description || '\u2014') + '</td><td>' + escapeHtml(String(price)) + '</td></tr>';
+    }
+    prodBody += '</table>';
+  } else {
+    prodBody = '<p>\u2014</p>';
+  }
+  h += stepBlock(1, 'Product Lineup', prodBody, { color:'accent', open:true });
+  // Revenue model + pricing strategy as hl-accent
+  h += '<div class="card-grid" style="margin-top:1rem">';
+  h += hlAccent('Revenue Model', d.revenueModel);
+  h += hlAccent('Pricing Strategy', d.pricingStrategy);
+  h += '</div>';
+  h += '</div>';
+  return h;
+}
+
+function renderRevenueSection(d) {
+  var idx = 4;
+  if (!d) return emptySection('revenue', idx);
+  var h = secStart('revenue', idx);
+  // KPI-style metric cards
+  h += '<div class="metric-grid">';
+  h += metricCard(d.revenueTargetY1, 'Revenue Y1');
+  h += metricCard(d.revenueTargetY3, 'Revenue Y3');
+  h += metricCard(d.customersPerMonth, 'Customers / Month');
+  h += metricCard(d.avgTransactionValue, 'Avg Transaction');
+  h += '</div>';
+  // Assumptions highlight
+  if (d.assumptions) {
+    h += hlAccent('Key Assumptions', d.assumptions);
+  }
+  h += '</div>';
+  return h;
+}
+
+function metricCard(val, label) {
+  return '<div class="metric-card"><div class="mc-num">' + escapeHtml(String(val || '\u2014')) + '</div><div class="mc-label">' + escapeHtml(label) + '</div></div>';
+}
+
+function renderCostsSection(d) {
+  var idx = 5;
+  if (!d) return emptySection('costs', idx);
+  var h = secStart('costs', idx);
+  // Startup costs table
+  if (d.startupCosts && d.startupCosts.length > 0) {
+    h += '<div class="card-label" style="margin-bottom:.5rem">Startup Costs</div>';
+    h += '<table class="plan-table"><tr><th>Item</th><th>Cost</th></tr>';
+    for (var i = 0; i < d.startupCosts.length; i++) {
+      var c = d.startupCosts[i];
+      var cost = c.cost || '\u2014';
+      h += '<tr><td>' + escapeHtml(c.item || '\u2014') + '</td><td>' + escapeHtml(String(cost)) + '</td></tr>';
+    }
+    h += '</table>';
+  }
+  // Monthly costs table
+  if (d.monthlyCosts && d.monthlyCosts.length > 0) {
+    h += '<div class="card-label" style="margin-bottom:.5rem">Monthly Costs</div>';
+    h += '<table class="plan-table"><tr><th>Item</th><th>Cost</th></tr>';
+    for (var i = 0; i < d.monthlyCosts.length; i++) {
+      var mc = d.monthlyCosts[i];
+      var mcost = mc.cost || '\u2014';
+      h += '<tr><td>' + escapeHtml(mc.item || '\u2014') + '</td><td>' + escapeHtml(String(mcost)) + '</td></tr>';
+    }
+    h += '</table>';
+  }
+  // Funding + Break-even callouts
+  h += '<div class="card-grid" style="margin-top:1rem">';
+  h += hlAccent('Funding Source', d.fundingSource);
+  h += hlAccent('Break-Even Estimate', d.breakEven);
+  h += '</div>';
+  h += '</div>';
+  return h;
+}
+
+function renderTeamSection(d) {
+  var idx = 6;
+  if (!d) return emptySection('team', idx);
+  var h = secStart('team', idx);
+  // Step per role: Founder
+  h += stepBlock(1, 'Founder Role', '<p>' + escapeHtml(d.founderRole || '\u2014') + '</p>', { color:'accent', open:true });
+  // Step: Key Hires
+  if (d.keyHires && d.keyHires.length > 0) {
+    var tagColors = ['tag-accent','tag-blue','tag-purple','tag-pink','tag-green','tag-amber'];
+    var hireBody = '<div class="tags-wrap">';
+    for (var i = 0; i < d.keyHires.length; i++) {
+      if (d.keyHires[i]) hireBody += '<span class="tag ' + tagColors[i % tagColors.length] + '">' + escapeHtml(d.keyHires[i]) + '</span>';
+    }
+    hireBody += '</div>';
+    h += stepBlock(2, 'Key Hires Needed', hireBody, { color:'blue' });
+  }
+  // Step: Tools
+  if (d.tools && d.tools.length > 0) {
+    var toolBody = '<div class="tags-wrap">';
+    for (var i = 0; i < d.tools.length; i++) {
+      if (d.tools[i]) toolBody += '<span class="tag tag-green">' + escapeHtml(d.tools[i]) + '</span>';
+    }
+    toolBody += '</div>';
+    h += stepBlock(3, 'Tools & Software', toolBody, { color:'green' });
+  }
+  // Skills gaps as decision callout
+  if (d.skillsGaps) {
+    h += decisionBox('Skills Gaps to Address', d.skillsGaps);
+  }
+  h += '</div>';
+  return h;
+}
+
+function renderMarketingSection(d) {
+  var idx = 7;
+  if (!d) return emptySection('marketing', idx);
+  var h = secStart('marketing', idx);
+  // Step per channel
+  if (d.channels && d.channels.length > 0) {
+    var channelColors = ['accent','green','blue','amber','pink'];
+    for (var i = 0; i < d.channels.length; i++) {
+      if (d.channels[i]) {
+        h += stepBlock(i + 1, 'Channel: ' + d.channels[i], '<p>Plan activity, cadence, and measurement for <strong>' + escapeHtml(d.channels[i]) + '</strong>.</p>', { color: channelColors[i % channelColors.length], open: i === 0 });
+      }
+    }
+  }
+  // Sales process as funnel
+  if (d.salesProcess) {
+    h += '<div class="card-label" style="margin-bottom:.5rem">Sales Process</div>';
+    var steps = d.salesProcess.split(/[;\n\.\d]+[\.\)]\s*/).filter(function(s) { return s.trim(); });
+    if (steps.length <= 1) steps = d.salesProcess.split(/,\s*/).filter(function(s) { return s.trim(); });
+    if (steps.length > 1) {
+      h += '<div class="funnel">';
+      for (var i = 0; i < steps.length; i++) {
+        h += '<div class="funnel-step"><div class="funnel-num">' + (i + 1) + '</div><div class="funnel-text">' + escapeHtml(steps[i].trim()) + '</div></div>';
+      }
+      h += '</div>';
+    } else {
+      h += '<div class="card"><p>' + escapeHtml(d.salesProcess) + '</p></div>';
+    }
+  }
+  // Lead gen + budget
+  h += '<div class="card-grid">';
+  h += '<div class="card"><div class="card-label">Lead Generation Strategy</div><p>' + escapeHtml(d.leadGenStrategy || '\u2014') + '</p></div>';
+  h += '<div class="card"><div class="card-label">Marketing Budget</div><p style="font-size:1.2rem;font-weight:700;color:var(--accent)">' + escapeHtml(d.marketingBudget || '\u2014') + '</p></div>';
+  h += '</div>';
+  h += '</div>';
+  return h;
+}
+
+// ── LAUNCH DASHBOARD STATE ──
+var lpActiveFilter = 'all';
+
+function getPlanId() {
+  var bn = (planData.overview && planData.overview.businessName) || 'plan';
+  return bn.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'').slice(0,40) || 'plan';
+}
+function lpStatusKey(){ return 'bpb-launch-status-' + getPlanId(); }
+function lpOwnersKey(){ return 'bpb-launch-owners-' + getPlanId(); }
+function lpGetStatuses(){ try{return JSON.parse(localStorage.getItem(lpStatusKey())||'{}');}catch(e){return {};} }
+function lpSaveStatuses(s){ try{localStorage.setItem(lpStatusKey(), JSON.stringify(s));}catch(e){ console.warn('[launch-plan] localStorage save failed', e); } }
+function lpGetOwners(){ try{return JSON.parse(localStorage.getItem(lpOwnersKey())||'{}');}catch(e){return {};} }
+function lpSaveOwners(o){ try{localStorage.setItem(lpOwnersKey(), JSON.stringify(o));}catch(e){ console.warn('[launch-plan] localStorage save failed', e); } }
+
+function lpGetTeamMembers() {
+  var tm = (planData.team && planData.team.teamMembers) || [];
+  if (!tm.length) {
+    // Fallback: synthesise from founderRole
+    var fr = (planData.team && planData.team.founderRole) || (config.userName || 'Founder');
+    tm = [{ name: (config.userName || fr.split(/[-:\u2014,]/)[0].trim() || 'Founder'), role: fr, specialization:'product' }];
+  }
+  return tm;
+}
+
+function lpResolveOwnerIdx(taskId, suggested) {
+  var owners = lpGetOwners();
+  if (owners[taskId] !== undefined) return owners[taskId];
+  return (typeof suggested === 'number') ? suggested : 0;
+}
+
+function lpFlattenTasks(d) {
+  var all = [];
+  if (!d || !d.weeks) return all;
+  d.weeks.forEach(function(w){
+    (w.days||[]).forEach(function(day){
+      (day.tasks||[]).forEach(function(t){
+        all.push({ task:t, day:day, week:w });
+      });
+    });
+  });
+  return all;
+}
+
+function renderLaunchSection(d) {
+  var idx = 8;
+  // No data at all
+  if (!d) return emptySection('launch', idx);
+
+  var h = secStart('launch', idx);
+
+  // Launch date headline
+  if (d.launchDate) {
+    h += '<div class="hl" style="margin-bottom:1rem;text-align:center"><div class="hl-label">Target Launch Date</div><div class="hl-big">' + escapeHtml(d.launchDate) + '</div></div>';
+  }
+
+  var hasStructured = d.weeks && d.weeks.length > 0;
+
+  if (!hasStructured) {
+    // Show thin view + Generate button
+    h += '<div class="lp-gen-wrap">';
+    h += '<h3>\u2728 Build your interactive 30-day plan</h3>';
+    h += '<p>Turn your week-by-week summary into a fully tracked project: day-by-day tasks, owners assigned to your real team, status tracking, workload balance, and progress KPIs \u2014 all generated by AI based on your business plan.</p>';
+    h += '<button class="lp-gen-btn" id="lpGenBtn" onclick="generateLaunchPlan()"><span class="lp-gen-spinner"></span><span class="lp-gen-label">\u2728 Generate detailed 30-day plan</span></button>';
+    h += '<div class="lp-gen-error" id="lpGenError" style="display:none"></div>';
+    h += '</div>';
+    // Existing thin week summary
+    h += '<div class="tl">';
+    h += '<div class="tl-seg" style="background:var(--accent)"><div class="tl-lbl">Week 1</div><div class="tl-date">Foundation</div></div>';
+    h += '<div class="tl-seg" style="background:var(--info)"><div class="tl-lbl">Week 2</div><div class="tl-date">Build</div></div>';
+    h += '<div class="tl-seg" style="background:var(--warning)"><div class="tl-lbl">Week 3</div><div class="tl-date">Soft Launch</div></div>';
+    h += '<div class="tl-seg" style="background:var(--success)"><div class="tl-lbl">Week 4</div><div class="tl-date">Go Live</div></div>';
+    h += '</div>';
+    var weeks = [
+      { key:'week1', title:'Week 1 \u2014 Foundation', color:'pink' },
+      { key:'week2', title:'Week 2 \u2014 Build', color:'blue' },
+      { key:'week3', title:'Week 3 \u2014 Soft Launch', color:'amber' },
+      { key:'week4', title:'Week 4 \u2014 Go Live', color:'green' }
+    ];
+    for (var i = 0; i < weeks.length; i++) {
+      var w = weeks[i];
+      var content = '<p>' + escapeHtml(d[w.key] || '\u2014') + '</p>';
+      h += stepBlock(i + 1, w.title, content, { color: w.color, open: i === 0 });
+    }
+    if (d.checklist && d.checklist.length > 0) {
+      h += '<div class="card" style="margin-top:1rem"><div class="card-label">Pre-Launch Checklist</div><ul class="checklist">';
+      for (var ci = 0; ci < d.checklist.length; ci++) {
+        if (d.checklist[ci]) h += '<li>' + escapeHtml(d.checklist[ci]) + '</li>';
+      }
+      h += '</ul></div>';
+    }
+    h += '</div>';
+    return h;
+  }
+
+  // ── INTERACTIVE PM DASHBOARD ──
+  var team = lpGetTeamMembers();
+  var allTasks = lpFlattenTasks(d);
+  var totalTasks = allTasks.length;
+
+  // KPI row
+  h += '<div class="lp-kpi-row" id="lpKpiRow">';
+  h += '<div class="lp-kpi"><div class="v" id="lpKpiDone">0 / ' + totalTasks + '</div><div class="l">Tasks Complete</div><div class="mini-bar"><div class="mini-fill" id="lpKpiDoneBar" style="width:0%"></div></div></div>';
+  h += '<div class="lp-kpi"><div class="v" id="lpKpiDays">\u2014</div><div class="l">Days to Launch</div></div>';
+  h += '<div class="lp-kpi"><div class="v" id="lpKpiTrackIcon" style="color:var(--success)">\u25cf</div><div class="l">Project Status</div><div class="status-label" id="lpKpiTrack"></div></div>';
+  h += '<div class="lp-kpi"><div class="v" id="lpKpiInProg">0</div><div class="l">In Progress</div></div>';
+  h += '</div>';
+
+  // Filter bar
+  h += '<div class="lp-filter-bar" id="lpFilterBar">';
+  h += '<button class="lp-filter-btn active" data-filter="all" onclick="lpFilterBy(\'all\')">All Tasks</button>';
+  for (var ti = 0; ti < team.length; ti++) {
+    h += '<button class="lp-filter-btn" data-filter="m' + ti + '" onclick="lpFilterBy(\'m' + ti + '\')">' + escapeHtml(team[ti].name) + '</button>';
+  }
+  h += '<button class="lp-filter-btn" data-filter="inprogress" onclick="lpFilterBy(\'inprogress\')">In Progress</button>';
+  h += '</div>';
+
+  // Workload summary
+  h += '<div class="lp-workload-bar" id="lpWorkloadBar"></div>';
+
+  // Week nav buttons
+  h += '<div class="lp-week-nav">';
+  for (var wi = 0; wi < d.weeks.length; wi++) {
+    var wk = d.weeks[wi];
+    h += '<button class="lp-week-btn" onclick="lpScrollToWeek(\'' + wk.id + '\')">' + escapeHtml(wk.label) + '<div class="wb-prog" id="lpWp-' + wk.id + '">0/0</div></button>';
+  }
+  h += '</div>';
+
+  // Day sections
+  for (var wi2 = 0; wi2 < d.weeks.length; wi2++) {
+    var wk2 = d.weeks[wi2];
+    h += '<div id="lpWeek-' + wk2.id + '">';
+    for (var di = 0; di < (wk2.days||[]).length; di++) {
+      var day = wk2.days[di];
+      h += '<div class="lp-day" id="lpDay-' + day.id + '">';
+      h += '<div class="lp-day-hdr">';
+      h += '<div class="lp-day-title">' + escapeHtml(day.title || day.label || day.id) + '<span class="lp-day-badge" id="lpDayBadge-' + day.id + '">0/' + (day.tasks||[]).length + '</span></div>';
+      h += '<div class="lp-day-date">' + escapeHtml(day.label || day.date || '') + '</div>';
+      h += '</div>';
+      // Tasks
+      for (var pi = 0; pi < (day.tasks||[]).length; pi++) {
+        var t = day.tasks[pi];
+        var ownerIdx = lpResolveOwnerIdx(t.id, t.suggestedOwner);
+        var member = team[ownerIdx] || team[0] || { name:'?', specialization:'product' };
+        var tagCls = 'lp-tag-c' + (ownerIdx % 6);
+        h += '<div class="lp-task" data-task-id="' + escapeHtml(t.id) + '" data-day-id="' + escapeHtml(day.id) + '" data-week-id="' + escapeHtml(wk2.id) + '" data-cat="' + escapeHtml(t.category||'') + '">';
+        h += '<div class="lp-status-btn" onclick="lpCycleStatus(\'' + escapeHtml(t.id) + '\')" title="Click to update status"><span class="status-dot"></span> To Do</div>';
+        h += '<div class="lp-task-who">';
+        h += '<span class="lp-tag ' + tagCls + '" data-owner-tag="' + escapeHtml(t.id) + '">' + escapeHtml(member.name) + '</span>';
+        h += '<select class="lp-owner-switch" data-owner-sel="' + escapeHtml(t.id) + '" onchange="lpSwitchOwner(this,\'' + escapeHtml(t.id) + '\')">';
+        for (var oi = 0; oi < team.length; oi++) {
+          h += '<option value="' + oi + '"' + (oi === ownerIdx ? ' selected' : '') + '>' + escapeHtml(team[oi].name) + '</option>';
+        }
+        h += '</select>';
+        h += '</div>';
+        h += '<div class="lp-task-what"><strong>' + escapeHtml(t.title || '') + '</strong>';
+        if (t.category) h += '<span class="lp-cat-badge cat-' + escapeHtml(t.category) + '">' + escapeHtml(t.category) + '</span>';
+        if (t.detail) h += '<div class="detail">' + escapeHtml(t.detail) + '</div>';
+        h += '</div>';
+        h += '</div>';
+      }
+      h += '</div>';
+    }
+    h += '</div>';
+  }
+
+  // Checklist
+  if (d.checklist && d.checklist.length > 0) {
+    h += '<div class="card" style="margin-top:1rem"><div class="card-label">Pre-Launch Checklist</div><ul class="checklist">';
+    for (var cli = 0; cli < d.checklist.length; cli++) {
+      if (d.checklist[cli]) h += '<li>' + escapeHtml(d.checklist[cli]) + '</li>';
+    }
+    h += '</ul></div>';
+  }
+
+  // Regenerate option
+  h += '<div style="text-align:center;margin-top:18px"><button class="lp-gen-btn" style="background:var(--bg-surface-2);color:var(--text-primary);border:1px solid var(--border-default)" id="lpGenBtn" onclick="generateLaunchPlan()"><span class="lp-gen-spinner"></span><span class="lp-gen-label">\u21bb Regenerate plan</span></button><div class="lp-gen-error" id="lpGenError" style="display:none"></div></div>';
+
+  h += '</div>';
+
+  // Schedule init after DOM is in
+  setTimeout(lpInitDashboard, 30);
+  return h;
+}
+
+// ── DASHBOARD RUNTIME ──
+function lpInitDashboard() {
+  if (!planData.launch || !planData.launch.weeks) return;
+  // Apply saved statuses to DOM
+  var statuses = lpGetStatuses();
+  Object.keys(statuses).forEach(function(tid){
+    var s = statuses[tid];
+    lpApplyTaskStatus(tid, s.status, s.by, s.at);
+  });
+  lpUpdateDashboard();
+}
+
+function lpFormatTime(iso) {
+  var d = new Date(iso);
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var h = d.getHours(), m = d.getMinutes();
+  return d.getDate() + ' ' + months[d.getMonth()] + ' ' + (h<10?'0'+h:h) + ':' + (m<10?'0'+m:m);
+}
+
+function lpGetTaskOwnerName(taskId) {
+  var sel = document.querySelector('[data-owner-sel="' + taskId + '"]');
+  var team = lpGetTeamMembers();
+  if (!sel) return 'Unknown';
+  var i = parseInt(sel.value, 10) || 0;
+  return (team[i] && team[i].name) || 'Unknown';
+}
+
+function lpCycleStatus(taskId) {
+  var statuses = lpGetStatuses();
+  var current = statuses[taskId] ? statuses[taskId].status : 'todo';
+  var next;
+  if (current === 'todo') next = 'inprogress';
+  else if (current === 'inprogress') next = 'done';
+  else next = 'todo';
+  var by = lpGetTaskOwnerName(taskId);
+  var at = new Date().toISOString();
+  if (next === 'todo') delete statuses[taskId];
+  else statuses[taskId] = { status: next, by: by, at: at };
+  lpSaveStatuses(statuses);
+  lpApplyTaskStatus(taskId, next, by, at);
+  lpUpdateDashboard();
+  if (lpActiveFilter !== 'all') lpFilterBy(lpActiveFilter);
+}
+
+function lpApplyTaskStatus(taskId, status, by, at) {
+  var taskEl = document.querySelector('.lp-task[data-task-id="' + taskId + '"]');
+  if (!taskEl) return;
+  var btn = taskEl.querySelector('.lp-status-btn');
+  taskEl.classList.remove('inprogress','done');
+  if (btn) btn.classList.remove('inprogress','done');
+  var oldInfo = taskEl.querySelector('.lp-task-status-info');
+  if (oldInfo) oldInfo.remove();
+  if (status === 'inprogress') {
+    if (btn) { btn.innerHTML = '<span class="status-dot"></span> In Progress'; btn.classList.add('inprogress'); }
+    taskEl.classList.add('inprogress');
+    var info = document.createElement('div');
+    info.className = 'lp-task-status-info';
+    info.innerHTML = '<strong>' + escapeHtml(by||'') + '</strong>' + (at ? ' \u00b7 ' + lpFormatTime(at) : '');
+    if (btn) btn.after(info);
+  } else if (status === 'done') {
+    if (btn) { btn.innerHTML = '<span class="status-dot"></span> Done'; btn.classList.add('done'); }
+    taskEl.classList.add('done');
+    var info2 = document.createElement('div');
+    info2.className = 'lp-task-status-info done-info';
+    info2.innerHTML = '<strong>' + escapeHtml(by||'') + '</strong>' + (at ? ' \u00b7 ' + lpFormatTime(at) : '');
+    if (btn) btn.after(info2);
+  } else {
+    if (btn) btn.innerHTML = '<span class="status-dot"></span> To Do';
+  }
+}
+
+function lpSwitchOwner(sel, taskId) {
+  var idx = parseInt(sel.value, 10) || 0;
+  var team = lpGetTeamMembers();
+  var member = team[idx] || team[0];
+  // Update tag
+  var tag = document.querySelector('[data-owner-tag="' + taskId + '"]');
+  if (tag) {
+    tag.className = 'lp-tag lp-tag-c' + (idx % 6);
+    tag.textContent = member.name;
+  }
+  // Save
+  var owners = lpGetOwners();
+  owners[taskId] = idx;
+  lpSaveOwners(owners);
+  lpUpdateDashboard();
+  lpCheckBalance(taskId);
+}
+
+function lpCalcProgress() {
+  var d = planData.launch;
+  var statuses = lpGetStatuses();
+  var all = lpFlattenTasks(d);
+  var total = all.length, done = 0, inprog = 0;
+  var byWeek = {}, byDay = {};
+  d.weeks.forEach(function(w){ byWeek[w.id] = {total:0,done:0}; });
+  all.forEach(function(rec){
+    byWeek[rec.week.id].total++;
+    if (!byDay[rec.day.id]) byDay[rec.day.id] = {total:0, done:0};
+    byDay[rec.day.id].total++;
+    var s = statuses[rec.task.id];
+    if (s && s.status === 'done') { done++; byWeek[rec.week.id].done++; byDay[rec.day.id].done++; }
+    else if (s && s.status === 'inprogress') inprog++;
+  });
+  // Days remaining
+  var daysLeft = '\u2014';
+  if (d.launchDate) {
+    var ld = new Date(d.launchDate + 'T12:00:00');
+    var today = new Date(); today.setHours(0,0,0,0);
+    daysLeft = Math.max(0, Math.ceil((ld - today) / 86400000));
+  }
+  // Expected progress
+  var totalDays = 0, passedDays = 0;
+  var today2 = new Date(); today2.setHours(0,0,0,0);
+  d.weeks.forEach(function(w){
+    (w.days||[]).forEach(function(day){
+      totalDays++;
+      if (day.date && new Date(day.date + 'T12:00:00') <= today2) passedDays++;
+    });
+  });
+  var expectedPct = totalDays > 0 ? (passedDays / totalDays) * 100 : 0;
+  var actualPct = total > 0 ? (done / total) * 100 : 0;
+  var trackStatus = 'on-track';
+  if (actualPct < expectedPct - 15) trackStatus = 'behind';
+  else if (actualPct < expectedPct - 5) trackStatus = 'at-risk';
+  return { total:total, done:done, inprog:inprog, pct:actualPct, daysLeft:daysLeft, expectedPct:expectedPct, trackStatus:trackStatus, byWeek:byWeek, byDay:byDay };
+}
+
+function lpUpdateDashboard() {
+  if (!planData.launch || !planData.launch.weeks) return;
+  var p = lpCalcProgress();
+  var el;
+  el = document.getElementById('lpKpiDone'); if (el) el.textContent = p.done + ' / ' + p.total;
+  el = document.getElementById('lpKpiDoneBar'); if (el) el.style.width = p.pct.toFixed(1) + '%';
+  el = document.getElementById('lpKpiDays'); if (el) el.textContent = p.daysLeft;
+  el = document.getElementById('lpKpiInProg'); if (el) el.textContent = p.inprog;
+  var ti = document.getElementById('lpKpiTrackIcon');
+  var tl = document.getElementById('lpKpiTrack');
+  if (ti && tl) {
+    if (p.trackStatus === 'on-track') { ti.style.color = 'var(--success)'; tl.className = 'status-label on-track'; tl.textContent = 'On Track'; }
+    else if (p.trackStatus === 'at-risk') { ti.style.color = 'var(--warning)'; tl.className = 'status-label at-risk'; tl.textContent = 'At Risk'; }
+    else { ti.style.color = 'var(--danger)'; tl.className = 'status-label behind'; tl.textContent = 'Behind'; }
+  }
+  // Week progress badges
+  Object.keys(p.byWeek).forEach(function(wid){
+    var wp = document.getElementById('lpWp-' + wid);
+    if (!wp) return;
+    var b = p.byWeek[wid];
+    wp.textContent = b.done + '/' + b.total + ' done';
+  });
+  // Day badges
+  Object.keys(p.byDay).forEach(function(did){
+    var b = document.getElementById('lpDayBadge-' + did);
+    if (!b) return;
+    var v = p.byDay[did];
+    b.textContent = v.done + '/' + v.total + (v.done === v.total && v.total > 0 ? ' \u2713' : '');
+    b.className = 'lp-day-badge' + (v.done === v.total && v.total > 0 ? ' all-done' : '');
+  });
+  lpUpdateWorkload();
+}
+
+function lpGetDayPersonCounts() {
+  var team = lpGetTeamMembers();
+  var counts = {};
+  if (!planData.launch || !planData.launch.weeks) return counts;
+  planData.launch.weeks.forEach(function(w){
+    (w.days||[]).forEach(function(day){
+      counts[day.id] = {};
+      for (var i = 0; i < team.length; i++) counts[day.id][i] = 0;
+      (day.tasks||[]).forEach(function(t){
+        var idx = lpResolveOwnerIdx(t.id, t.suggestedOwner);
+        if (counts[day.id][idx] !== undefined) counts[day.id][idx]++;
+      });
+    });
+  });
+  return counts;
+}
+
+function lpGetIdleDays() {
+  var team = lpGetTeamMembers();
+  var counts = lpGetDayPersonCounts();
+  var today = new Date(); today.setHours(0,0,0,0);
+  var idle = {};
+  for (var i = 0; i < team.length; i++) idle[i] = [];
+  if (!planData.launch || !planData.launch.weeks) return idle;
+  planData.launch.weeks.forEach(function(w){
+    (w.days||[]).forEach(function(day){
+      if (day.date) {
+        var dd = new Date(day.date + 'T12:00:00');
+        if (dd < today) return;
+      }
+      for (var i = 0; i < team.length; i++) {
+        if ((counts[day.id]||{})[i] === 0) idle[i].push(day.label || day.id);
+      }
+    });
+  });
+  return idle;
+}
+
+function lpUpdateWorkload() {
+  var team = lpGetTeamMembers();
+  var statuses = lpGetStatuses();
+  var people = team.map(function(m){ return { todo:0, ip:0, done:0, name:m.name, spec:m.specialization||'' }; });
+  if (planData.launch && planData.launch.weeks) {
+    planData.launch.weeks.forEach(function(w){
+      (w.days||[]).forEach(function(day){
+        (day.tasks||[]).forEach(function(t){
+          var idx = lpResolveOwnerIdx(t.id, t.suggestedOwner);
+          if (!people[idx]) return;
+          var s = statuses[t.id];
+          if (s && s.status === 'done') people[idx].done++;
+          else if (s && s.status === 'inprogress') people[idx].ip++;
+          else people[idx].todo++;
+        });
+      });
+    });
+  }
+  var idle = lpGetIdleDays();
+  var bar = document.getElementById('lpWorkloadBar');
+  if (!bar) return;
+  var html = '';
+  people.forEach(function(p, i){
+    var idleDays = idle[i] || [];
+    var warnCls = (idleDays.length > 0 && (p.todo + p.ip) > 0) ? '' : (idleDays.length > 0 ? ' wl-idle' : '');
+    html += '<div class="lp-workload-item' + warnCls + '">';
+    html += '<span class="lp-tag lp-tag-c' + (i % 6) + '">' + escapeHtml(p.name) + '</span>';
+    if (p.spec) html += '<span class="lp-wl-spec-badge">' + escapeHtml(p.spec) + '</span>';
+    html += '<span class="wl-counts">';
+    html += '<span class="wl-todo">' + p.todo + ' to do</span>';
+    if (p.ip > 0) html += ' \u00b7 <span class="wl-ip">' + p.ip + ' in progress</span>';
+    html += ' \u00b7 <span class="wl-done">' + p.done + ' done</span>';
+    if (idleDays.length > 0) {
+      var first = idleDays.slice(0,2).join(', ');
+      if (idleDays.length > 2) first += ' +' + (idleDays.length - 2);
+      html += '<span class="lp-wl-idle-badge"> \u2014 idle: ' + escapeHtml(first) + '</span>';
+    }
+    html += '</span></div>';
+  });
+  bar.innerHTML = html;
+}
+
+function lpCheckBalance(taskId) {
+  var team = lpGetTeamMembers();
+  var sel = document.querySelector('[data-owner-sel="' + taskId + '"]');
+  if (!sel) return;
+  var idx = parseInt(sel.value, 10) || 0;
+  var taskEl = document.querySelector('.lp-task[data-task-id="' + taskId + '"]');
+  var cat = taskEl ? taskEl.getAttribute('data-cat') : '';
+  var msg = '';
+  if (cat && team[idx] && team[idx].specialization && team[idx].specialization !== cat) {
+    var ideal = null;
+    for (var i = 0; i < team.length; i++) {
+      if (team[i].specialization === cat) { ideal = team[i].name; break; }
+    }
+    if (ideal) msg += 'This is a ' + cat + ' task \u2014 usually best for ' + ideal + '. ';
+  }
+  var idle = lpGetIdleDays();
+  var idleWarns = [];
+  for (var k = 0; k < team.length; k++) {
+    var days = idle[k] || [];
+    if (days.length > 0) idleWarns.push(team[k].name + ' has no tasks on ' + days.slice(0,2).join(', '));
+  }
+  if (idleWarns.length > 0) msg += idleWarns.join('. ') + '.';
+  var old = document.querySelector('.lp-balance-toast');
+  if (old) old.remove();
+  if (!msg) return;
+  var toast = document.createElement('div');
+  toast.className = 'lp-balance-toast';
+  toast.innerHTML = '\u26a0\ufe0f ' + escapeHtml(msg) + ' <span class="toast-close" onclick="this.parentElement.remove()">\u2715</span>';
+  document.body.appendChild(toast);
+  setTimeout(function(){ if (toast.parentElement) toast.remove(); }, 8000);
+}
+
+function lpFilterBy(filter) {
+  lpActiveFilter = filter;
+  document.querySelectorAll('.lp-filter-btn').forEach(function(b){
+    b.classList.toggle('active', b.getAttribute('data-filter') === filter);
+  });
+  var statuses = lpGetStatuses();
+  document.querySelectorAll('.lp-task').forEach(function(taskDiv){
+    taskDiv.classList.remove('dimmed');
+    if (filter === 'all') return;
+    var tid = taskDiv.getAttribute('data-task-id');
+    if (filter === 'inprogress') {
+      var s = statuses[tid];
+      if (!s || s.status !== 'inprogress') taskDiv.classList.add('dimmed');
+    } else if (filter.charAt(0) === 'm') {
+      var idx = parseInt(filter.substring(1), 10);
+      var sel = taskDiv.querySelector('.lp-owner-switch');
+      if (!sel || parseInt(sel.value,10) !== idx) taskDiv.classList.add('dimmed');
+    }
+  });
+}
+
+function lpScrollToWeek(wid) {
+  var el = document.getElementById('lpWeek-' + wid);
+  if (el) el.scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+// ── GENERATE LAUNCH PLAN VIA AI ──
+function generateLaunchPlan() {
+  var btn = document.getElementById('lpGenBtn');
+  var errEl = document.getElementById('lpGenError');
+  if (errEl) { errEl.style.display = 'none'; errEl.textContent = ''; }
+  if (btn) { btn.classList.add('loading'); btn.disabled = true; var lbl = btn.querySelector('.lp-gen-label'); if (lbl) lbl.textContent = ' Generating...'; }
+
+  var team = lpGetTeamMembers();
+  var bn = (planData.overview && planData.overview.businessName) || 'the business';
+  var teamSummary = team.map(function(m,i){ return '  ' + i + ': ' + m.name + ' (' + (m.role||'') + ', spec=' + (m.specialization||'product') + ')'; }).join('\n');
+  var launchDate = (planData.launch && planData.launch.launchDate) || '';
+  var sysPrompt = 'You are a launch project planner. Produce a detailed structured 30-day launch plan for the user\'s business.\n\n' +
+    'BUSINESS CONTEXT (full plan data):\n' + JSON.stringify(planData, null, 2) + '\n\n' +
+    'TEAM MEMBERS (use 0-based indexes for suggestedOwner):\n' + teamSummary + '\n\n' +
+    'OUTPUT REQUIREMENTS:\n' +
+    '1. Output ONLY a single [PLANDATA:launch]{...}[/PLANDATA] block. No prose before or after.\n' +
+    '2. The JSON MUST contain: launchDate, week1, week2, week3, week4, checklist, AND a "weeks" array with EXACTLY 4 weeks.\n' +
+    '3. Each week object: {id:"w1"|"w2"|"w3"|"w4", label:"Week N \u2014 Theme", theme:"accent"|"blue"|"amber"|"green", days:[...]}.\n' +
+    '4. Each week has 4-5 working day objects: {id:"w1d1", date:"YYYY-MM-DD", label:"Mon 15 Apr", title:"Theme of the day", tasks:[...]}.\n' +
+    '5. Each day has 2-3 task objects: {id:"task-N", title:"Concrete action", detail:"How / what success looks like", category:"marketing"|"systems"|"product", suggestedOwner:<index into team>}.\n' +
+    '6. Total ~30-40 tasks. Every task tailored to ' + bn + ' \u2014 NO generic filler.\n' +
+    '7. suggestedOwner must match the task category to the team member\'s specialization where possible.\n' +
+    '8. Sequential ids: task-1, task-2, ... Day ids: w1d1..w1d5, w2d1..w2d5 etc.\n' +
+    '9. Themes per week: w1=accent, w2=blue, w3=amber, w4=green.\n' +
+    (launchDate ? '10. Anchor schedule so launch lands on or near ' + launchDate + '.\n' : '10. Pick a launch date 30 days from today (today is ' + new Date().toISOString().slice(0,10) + ').\n') +
+    '11. Keep week1/week2/week3/week4 strings as one-sentence summaries. Keep checklist as 5-10 short pre-launch items.\n';
+
+  var proxyUrl = PROXY_ENDPOINT || '/api/chat';
+  fetch(proxyUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider: config.provider,
+      apiKey: config.apiKey,
+      model: config.model,
+      system: sysPrompt,
+      messages: [{ role:'user', content:'Generate the detailed 30-day launch plan now. Output the [PLANDATA:launch] block only.' }],
+      endpoint: config.endpoint
+    })
+  }).then(function(resp){
+    if (!resp.ok) return resp.text().then(function(t){ throw new Error('Server ' + resp.status + ': ' + t.slice(0,180)); });
+    return resp.json();
+  }).then(function(data){
+    if (data.error) throw new Error(data.error);
+    var fullText = data.text || '';
+    var result = extractPlanDataFromText(fullText);
+    if (!result.extractedData || !result.extractedData.launch) throw new Error('AI did not return a valid launch plan. Try again.');
+    var newLaunch = result.extractedData.launch;
+    // Merge: preserve existing top-level fields if AI omitted
+    planData.launch = Object.assign({}, planData.launch || {}, newLaunch);
+    saveState();
+    // Re-render the plan view, then jump back to launch tab
+    showPlan();
+    setTimeout(function(){
+      var tabs = document.querySelectorAll('.plan-tab');
+      for (var i = 0; i < tabs.length; i++) {
+        if (tabs[i].textContent.indexOf('30-Day Launch') > -1) { showPlanTab('launch', tabs[i]); break; }
+      }
+    }, 30);
+  }).catch(function(err){
+    var errEl2 = document.getElementById('lpGenError');
+    if (errEl2) { errEl2.textContent = 'Error: ' + err.message; errEl2.style.display = 'block'; }
+    var btn2 = document.getElementById('lpGenBtn');
+    if (btn2) { btn2.classList.remove('loading'); btn2.disabled = false; var lbl2 = btn2.querySelector('.lp-gen-label'); if (lbl2) lbl2.textContent = '\u2728 Generate detailed 30-day plan'; }
+  });
+}
+
+function renderMetricsSection(d) {
+  var idx = 9;
+  if (!d) return emptySection('metrics', idx);
+  var h = secStart('metrics', idx);
+  // Milestones as KPI row (30/90/365 day)
+  h += '<div class="kpi-row" style="grid-template-columns:repeat(3,1fr)">';
+  h += '<div class="kpi-card" style="border-top:3px solid var(--accent)"><div class="kpi-num">30d</div><div class="kpi-label" style="margin-bottom:.5rem">First Month</div><div style="font-size:.85rem;color:var(--text-primary)">' + escapeHtml(d.milestone30 || '\u2014') + '</div></div>';
+  h += '<div class="kpi-card" style="border-top:3px solid var(--info)"><div class="kpi-num">90d</div><div class="kpi-label" style="margin-bottom:.5rem">First Quarter</div><div style="font-size:.85rem;color:var(--text-primary)">' + escapeHtml(d.milestone90 || '\u2014') + '</div></div>';
+  h += '<div class="kpi-card" style="border-top:3px solid var(--success)"><div class="kpi-num">365d</div><div class="kpi-label" style="margin-bottom:.5rem">First Year</div><div style="font-size:.85rem;color:var(--text-primary)">' + escapeHtml(d.milestone12 || '\u2014') + '</div></div>';
+  h += '</div>';
+  // KPIs
+  if (d.kpis && d.kpis.length > 0) {
+    h += '<div class="card" style="margin-top:1rem"><div class="card-label">Key Performance Indicators</div><div class="tags-wrap" style="margin-top:.5rem">';
+    for (var i = 0; i < d.kpis.length; i++) {
+      if (d.kpis[i]) h += '<span class="tag tag-accent">' + escapeHtml(d.kpis[i]) + '</span>';
+    }
+    h += '</div></div>';
+  }
+  // Risk as decision callout
+  if (d.biggestRisk) {
+    var riskBody = d.biggestRisk + (d.riskMitigation ? '  \u2014  Mitigation: ' + d.riskMitigation : '');
+    h += decisionBox('Biggest Risk & Mitigation', riskBody);
+  }
+  h += '</div>';
+  return h;
+}
+
+// ══════════════════════════════════════════════════════════════
+// PLAN TAB NAVIGATION
+// ══════════════════════════════════════════════════════════════
+function showPlanTab(id, tabEl) {
+  // Deactivate all tabs
+  var tabs = document.querySelectorAll('.plan-tab');
+  for (var i = 0; i < tabs.length; i++) tabs[i].classList.remove('active');
+  // Activate clicked tab
+  if (tabEl) tabEl.classList.add('active');
+  // Hide all sections, show selected
+  var secs = document.querySelectorAll('.sec');
+  for (var i = 0; i < secs.length; i++) secs[i].classList.remove('active');
+  var target = document.getElementById('sec-' + id);
+  if (target) target.classList.add('active');
+}
+
+// ══════════════════════════════════════════════════════════════
+// PLAN ACCORDION
+// ══════════════════════════════════════════════════════════════
+function togglePlanStep(el) {
+  var acc = el.parentElement;
+  acc.classList.toggle('open');
+}
+
+function toggleStep(el) {
+  if (el) el.classList.toggle('open');
+}
+
+// ══════════════════════════════════════════════════════════════
+// DISCUSSION & EDIT PANELS
+// ══════════════════════════════════════════════════════════════
+function toggleDiscussion(sectionId, btnEl) {
+  var panel = document.getElementById('disc-' + sectionId);
+  if (!panel) return;
+  var isActive = panel.classList.contains('active');
+  // Close all panels first
+  var allPanels = document.querySelectorAll('.disc-panel,.edit-panel');
+  for (var i = 0; i < allPanels.length; i++) allPanels[i].classList.remove('active');
+  var allBtns = document.querySelectorAll('.sec-action-btn');
+  for (var i = 0; i < allBtns.length; i++) allBtns[i].classList.remove('active');
+  // Toggle this one
+  if (!isActive) {
+    panel.classList.add('active');
+    if (btnEl) btnEl.classList.add('active');
+  }
+}
+
+function toggleEditPanel(sectionId, btnEl) {
+  var panel = document.getElementById('edit-' + sectionId);
+  if (!panel) return;
+  var isActive = panel.classList.contains('active');
+  // Close all panels first
+  var allPanels = document.querySelectorAll('.disc-panel,.edit-panel');
+  for (var i = 0; i < allPanels.length; i++) allPanels[i].classList.remove('active');
+  var allBtns = document.querySelectorAll('.sec-action-btn');
+  for (var i = 0; i < allBtns.length; i++) allBtns[i].classList.remove('active');
+  // Toggle this one
+  if (!isActive) {
+    panel.classList.add('active');
+    if (btnEl) btnEl.classList.add('active');
+    var input = document.getElementById('editInput-' + sectionId);
+    if (input) setTimeout(function() { input.focus(); }, 100);
+  }
+}
+
+function handleEditKey(e, sectionId) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendSectionEdit(sectionId); }
+}
+
+function sendSectionEdit(sectionId) {
+  var input = document.getElementById('editInput-' + sectionId);
+  var btn = document.getElementById('editBtn-' + sectionId);
+  var status = document.getElementById('editStatus-' + sectionId);
+  if (!input || !btn) return;
+
+  var userRequest = input.value.trim();
+  if (!userRequest) return;
+
+  // Disable inputs
+  input.disabled = true;
+  btn.disabled = true;
+  status.textContent = 'Updating section...';
+  status.className = 'edit-status';
+  status.style.display = 'block';
+
+  // Find the section info
+  var sectionInfo = null;
+  for (var i = 0; i < SECTIONS.length; i++) {
+    if (SECTIONS[i].id === sectionId) { sectionInfo = SECTIONS[i]; break; }
+  }
+
+  // Build a focused prompt for editing just this section
+  var editSystemPrompt = 'You are a business plan editor. The user has already completed a business plan and wants to amend one section.\n\n' +
+    'CURRENT DATA for the "' + (sectionInfo ? sectionInfo.title : sectionId) + '" section:\n' +
+    JSON.stringify(planData[sectionId], null, 2) + '\n\n' +
+    'The user wants to make changes. Apply their requested changes to the data and output the COMPLETE updated section data.\n\n' +
+    'CRITICAL RULES:\n' +
+    '1. Keep all existing data that the user has NOT asked to change.\n' +
+    '2. Apply only the changes they requested.\n' +
+    '3. Output your response as a brief friendly confirmation (1-2 sentences) of what you changed, followed by the updated data block.\n' +
+    '4. The data block MUST be in this exact format at the END of your message:\n' +
+    '   [PLANDATA:' + sectionId + ']{...complete JSON...}[/PLANDATA]\n' +
+    '5. The JSON must include ALL fields for this section, not just the changed ones.\n';
+
+  var editMessages = [
+    { role: 'user', content: userRequest }
+  ];
+
+  // Use the same API call pattern
+  var proxyUrl = PROXY_ENDPOINT || '/api/chat';
+  fetch(proxyUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      provider: config.provider,
+      apiKey: config.apiKey,
+      model: config.model,
+      system: editSystemPrompt,
+      messages: editMessages,
+      endpoint: config.endpoint
+    })
+  }).then(function(resp) {
+    if (!resp.ok) return resp.text().then(function(t) { throw new Error('Server error ' + resp.status); });
+    return resp.json();
+  }).then(function(data) {
+    if (data.error) throw new Error(data.error);
+    var fullText = data.text;
+
+    // Extract updated plan data
+    var result = extractPlanDataFromText(fullText);
+    if (result.extractedData && result.extractedData[sectionId]) {
+      // Update plan data
+      planData[sectionId] = result.extractedData[sectionId];
+
+      // Add edit to section messages history
+      if (!sectionMessages[sectionId]) sectionMessages[sectionId] = [];
+      sectionMessages[sectionId].push({ role: 'user', content: '✏️ Edit: ' + userRequest });
+      sectionMessages[sectionId].push({ role: 'assistant', content: result.cleanText });
+
+      saveState();
+
+      // Success — refresh the plan view
+      status.textContent = '✓ Section updated! Refreshing...';
+      status.className = 'edit-status success';
+      status.style.display = 'block';
+      input.value = '';
+
+      // Re-render the plan after a short delay
+      setTimeout(function() {
+        var activeTabId = sectionId;
+        showPlan();
+        // Re-select the tab we were on
+        var tabs = document.querySelectorAll('.plan-tab');
+        for (var i = 0; i < tabs.length; i++) {
+          if (SECTIONS[i] && SECTIONS[i].id === activeTabId) {
+            showPlanTab(activeTabId, tabs[i]);
+            break;
+          }
+        }
+      }, 800);
+    } else {
+      throw new Error('AI did not return updated data. Try rephrasing your request.');
+    }
+  }).catch(function(err) {
+    status.textContent = 'Error: ' + err.message;
+    status.className = 'edit-status error';
+    status.style.display = 'block';
+    input.disabled = false;
+    btn.disabled = false;
+  });
+}
+
+function closePlan() { document.getElementById('planOverlay').classList.remove('active'); }
+
+// ══════════════════════════════════════════════════════════════
+// RESET
+// ══════════════════════════════════════════════════════════════
+function showResetModal() { document.getElementById('resetModal').classList.add('active'); }
+function hideResetModal() { document.getElementById('resetModal').classList.remove('active'); }
+function doReset() {
+  localStorage.removeItem('od-bplan-v4');
+  messages = []; planData = {}; completedSections = []; sectionMessages = {}; lastSectionMsgIndex = 0;
+  config = { provider: 'anthropic', apiKey: '', model: window.AI_MODELS.default, endpoint: '', userName: '' };
+  hideResetModal();
+  document.getElementById('chatMessages').innerHTML = '';
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('setupScreen').style.display = 'flex';
+}
+
+// ══════════════════════════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════════════════════════
+(function init() {
+  // Auto-reset if ?reset in URL
+  if (window.location.search.indexOf('reset') > -1) {
+    localStorage.removeItem('od-bplan-v4');
+    window.history.replaceState({}, '', window.location.pathname);
+    return; // show setup screen
+  }
+
+  if (PROXY_ENDPOINT) config.endpoint = PROXY_ENDPOINT;
+
+  var hasState = loadState();
+
+  if (hasState && (config.apiKey || PROXY_ENDPOINT) && messages.length > 0) {
+    showApp();
+    // Rebuild chat from saved messages
+    for (var i = 0; i < messages.length; i++) {
+      var result = extractPlanDataFromText(messages[i].content);
+      var displayText = result.cleanText.replace('[PLAN_COMPLETE]', '').trim();
+      addMessageBubble(messages[i].role, displayText);
+    }
+    if (completedSections.length === SECTIONS.length) showPlanCompleteMessage();
+  } else {
+    // Clear any broken state
+    localStorage.removeItem('od-bplan-v4');
+    messages = []; planData = {}; completedSections = []; sectionMessages = {}; lastSectionMsgIndex = 0;
+    config = { provider: 'anthropic', apiKey: '', model: window.AI_MODELS.default, endpoint: '', userName: '' };
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,60 @@
+name = "money-confidence-daily"
+main = "money-daily-worker.js"
+compatibility_date = "2024-12-01"
+
+# Hourly across the London morning. "0 8-11 * * *" fires at 08:00–11:00 UTC, which
+# is 09:00–12:00 London in BST and 08:00–11:00 London in GMT. Either way THREE of
+# those firings land inside the worker's 09:00–11:59 London window, so the brief
+# gets three chances a day in both halves of the year.
+#
+# WHY NOT ONE CRON (fixed 7 Aug 2026): this was "0 8 * * *" + "0 9 * * *", one for
+# BST and one for GMT, and the gate accepted only 09:00–09:10 London. So exactly
+# ONE firing per day could ever pass, and a cron that was missed or ran more than
+# ten minutes late produced NO brief and NO alarm — an early return throws nothing,
+# so alertFailure never sees it. That is what happened on Fri 7 Aug 2026.
+# Redundancy alone would mean duplicate briefs, so the worker is now idempotent:
+# alreadyBriefedToday() checks whether today's `Full Brief` is populated and the
+# later firings return early. Widening the cron without that check would spam Kevin.
+# (Was 09:30 money-only; promoted to the 09:00 AI CEO brief on 28 Jul 2026.)
+#
+# WHY THE DAY IS FILTERED IN CODE, NOT IN THE CRON (fixed 3 Aug 2026):
+# these were "0 8 * * 1-5" / "0 9 * * 1-5", read as Mon–Fri. Cloudflare ran them
+# Sun–Thu. Measured, not guessed — workersInvocationsAdaptive for 27 Jul–3 Aug
+# 2026 shows ZERO invocations on Sat 1 Aug, a full pair on Sun 2 Aug, and no
+# 08:00 firing on Fri 31 Jul. So this scheduler's day-of-week field starts the
+# week at Sunday=1, making 1-5 mean Sun–Thu. Kevin silently lost every Friday
+# brief and gained a Sunday one.
+# The day-of-week field is now unused. The day is decided by isLondonSendTime(),
+# in Europe/London, covered by tests/ceo-brief-schedule.test.js. A handful of
+# throwaway weekend invocations a day that return in microseconds is the price,
+# and it is worth paying to never re-litigate whose week starts where.
+[triggers]
+crons = ["0 8-11 * * *"]
+
+# Same-zone workers cannot call each other via public URLs (Cloudflare error
+# 1042) — AI calls go through a direct service binding to claude-proxy.
+[[services]]
+binding = "PROXY"
+service = "claude-proxy"
+
+# ── AI models — the ONE place this deployable names a model ──
+# Mirrors js/ai-models.js (the browser single source). Plain vars, not secrets.
+[vars]
+AI_MODEL_DEFAULT = "claude-sonnet-4-6"
+AI_MODEL_LIGHT = "claude-haiku-4-5-20251001"
+
+# Secrets are managed via `wrangler secret put` and persist across deploys —
+# not listed here so a deploy never drops them:
+#   SLACK_BOT_TOKEN    xoxb-… (chat:write, users:read, users:read.email)
+#   AIRTABLE_PAT       pat_…  (read: Accounts, Tenancies, Costs, Transactions,
+#                              Tasks; write: CEO Briefs)
+#   PROXY_TOKEN        bearer for claude-proxy service calls (PROXY_SERVICE_TOKEN_2)
+#   QUARTER_CONTEXT    current-quarter goals paragraph (update each quarter —
+#                      NEVER in this file, the repo is public)
+#   CALENDAR_ICS_URL   (optional) Google Calendar private ICS address
+#   RECIPIENT_EMAIL    (optional) defaults to kevin@runpreneur.org.uk in code
+#   TRIGGER_KEY        guards the manual /?mode=… test endpoints
+
+# Persist worker logs (Workers Logs) so silent cron failures are diagnosable.
+[observability]
+enabled = true
