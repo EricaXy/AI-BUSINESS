@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Profit &amp; Loss &mdash; Standard Operating Procedure</title>
+<link rel="stylesheet" href="css/tokens.css?v=1">
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+body {
+  line-height: 1.6; color: var(--text-primary); background: var(--bg-app);
+}
+.header { background: linear-gradient(135deg, var(--accent) 0%, var(--accent) 100%); color: white; padding: 2.5rem 2rem 2rem; position: relative; overflow: hidden; }
+.header::after { content:''; position:absolute; top:-50%; right:-10%; width:500px; height:500px; background:radial-gradient(circle,rgba(255,255,255,0.08) 0%,transparent 70%); border-radius:50%; }
+.header-inner { max-width:1100px; margin:0 auto; position:relative; z-index:1; }
+.header-back { display:inline-flex; align-items:center; gap:0.4rem; font-size:0.82rem; opacity:0.7; text-decoration:none; color:white; margin-bottom:1rem; transition:opacity 0.15s; }
+.header-back:hover { opacity:1; }
+.header h1 { font-size:2.2rem; font-weight:700; margin-bottom:0.3rem; letter-spacing:-0.5px; }
+.header .subtitle { font-size:1.05rem; opacity:0.85; }
+.header .version { font-size:0.85rem; opacity:0.6; margin-top:0.5rem; }
+.container { max-width:1100px; margin:0 auto; padding:0 1.5rem 4rem; }
+.section { margin-top:2.5rem; }
+.section-title { font-size:1.5rem; font-weight:700; color:var(--accent); padding-bottom:0.5rem; border-bottom:3px solid var(--accent-soft); margin-bottom:1.25rem; display:flex; align-items:center; gap:0.5rem; }
+.section-title .icon { font-size:1.4rem; }
+.card { background:var(--bg-surface); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:1.5rem; margin-bottom:1.25rem; border:1px solid var(--border-default); }
+.card-header { font-size:1.1rem; font-weight:600; color:var(--text-primary); margin-bottom:0.75rem; display:flex; align-items:center; gap:0.5rem; }
+.quick-ref { background:linear-gradient(135deg,var(--accent-soft) 0%,var(--accent-soft) 100%); border:2px solid var(--accent-soft); border-radius:var(--radius-xl); padding:1.5rem; margin-top:-1rem; position:relative; z-index:2; box-shadow:var(--shadow-lg); }
+.quick-ref h2 { font-size:1.2rem; color:var(--accent); margin-bottom:1rem; display:flex; align-items:center; gap:0.5rem; }
+.qr-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:0.75rem; }
+.qr-item { background:var(--bg-surface); border-radius:var(--radius-lg); padding:0.75rem 1rem; border-left:4px solid var(--accent); font-size:0.88rem; }
+.qr-item .qr-label { font-weight:600; color:var(--text-secondary); font-size:0.75rem; text-transform:uppercase; letter-spacing:0.5px; }
+.qr-item .qr-value { color:var(--text-primary); margin-top:0.15rem; word-break:break-all; }
+.qr-item .qr-value a { color:var(--accent); text-decoration:none; }
+.qr-item .qr-value a:hover { text-decoration:underline; }
+.toc { background:var(--bg-surface); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); padding:1.5rem; border:1px solid var(--border-default); }
+.toc h2 { font-size:1.15rem; color:var(--accent); margin-bottom:1rem; }
+.toc-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:0.35rem 1.5rem; }
+.toc a { display:flex; align-items:center; gap:0.5rem; color:var(--text-secondary); text-decoration:none; padding:0.35rem 0.5rem; border-radius:6px; font-size:0.9rem; transition:background 0.15s; }
+.toc a:hover { background:var(--accent-soft); color:var(--accent); }
+.toc a .toc-num { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:50%; background:var(--accent-soft); color:var(--accent); font-size:0.7rem; font-weight:700; flex-shrink:0; }
+.flow { display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:0; padding:1.5rem 0; }
+.flow-step { background:var(--bg-surface); border:2px solid var(--accent-soft); border-radius:var(--radius-lg); padding:0.75rem 1.1rem; text-align:center; font-size:0.85rem; font-weight:600; color:var(--text-secondary); min-width:110px; }
+.flow-step.primary { background:var(--accent); color:white; border-color:var(--accent); }
+.flow-step.success { background:var(--success); color:white; border-color:var(--success); }
+.flow-step.warning { background:var(--warning); color:white; border-color:var(--warning); }
+.flow-step.purple { background:var(--accent); color:white; border-color:var(--accent); }
+.flow-step .flow-icon { font-size:1.3rem; display:block; margin-bottom:0.25rem; }
+.flow-step .flow-sub { font-weight:400; font-size:0.75rem; opacity:0.85; margin-top:0.15rem; }
+.flow-arrow { font-size:1.4rem; color:var(--text-muted); padding:0 0.3rem; flex-shrink:0; }
+.label-table { width:100%; border-collapse:separate; border-spacing:0; font-size:0.88rem; }
+.label-table th { background:var(--accent); color:white; padding:0.75rem 1rem; text-align:left; font-weight:600; font-size:0.8rem; text-transform:uppercase; letter-spacing:0.5px; }
+.label-table th:first-child { border-radius:var(--radius-lg) 0 0 0; }
+.label-table th:last-child { border-radius:0 var(--radius-lg) 0 0; }
+.label-table td { padding:0.65rem 1rem; border-bottom:1px solid var(--border-default); vertical-align:top; }
+.label-table tr:last-child td { border-bottom:none; }
+.label-table tr:nth-child(even) td { background:var(--bg-surface-2); }
+.label-table tr:hover td { background:var(--accent-soft); }
+.label-badge { display:inline-block; padding:0.2rem 0.6rem; border-radius:999px; font-weight:600; font-size:0.78rem; white-space:nowrap; }
+.lb-blue { background:var(--accent-soft); color:var(--accent); } .lb-amber { background:var(--warning-bg); color:var(--warning); }
+.lb-red { background:var(--danger-bg); color:var(--danger); } .lb-green { background:var(--success-bg); color:var(--success); }
+.lb-purple { background:var(--accent-soft); color:var(--accent); }
+.wf-card { background:var(--bg-surface); border-radius:var(--radius-xl); box-shadow:var(--shadow-sm); border:1px solid var(--border-default); overflow:hidden; margin-bottom:1.5rem; }
+.wf-header { padding:1rem 1.5rem; display:flex; align-items:center; gap:0.75rem; border-bottom:1px solid var(--border-default); }
+.wf-num { display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:50%; font-weight:700; font-size:1rem; flex-shrink:0; color:white; background:var(--accent); }
+.wf-header h3 { font-size:1.1rem; font-weight:700; color:var(--text-primary); }
+.wf-header .wf-tag { font-size:0.75rem; padding:0.15rem 0.5rem; border-radius:999px; background:var(--bg-subtle); color:var(--text-secondary); font-weight:500; }
+.wf-body { padding:1.25rem 1.5rem; }
+.wf-body h4 { font-size:0.9rem; font-weight:600; color:var(--text-secondary); margin-bottom:0.5rem; margin-top:1rem; }
+.wf-body h4:first-child { margin-top:0; }
+.steps { counter-reset:step; list-style:none; padding:0; }
+.steps li { position:relative; padding:0.5rem 0 0.5rem 2.5rem; font-size:0.9rem; line-height:1.5; }
+.steps li::before { counter-increment:step; content:counter(step); position:absolute; left:0; top:0.45rem; width:24px; height:24px; border-radius:50%; background:var(--accent-soft); color:var(--accent); font-size:0.75rem; font-weight:700; display:flex; align-items:center; justify-content:center; }
+.steps li + li { border-top:1px solid var(--bg-subtle); }
+.info-box { padding:0.85rem 1rem; border-radius:var(--radius-lg); font-size:0.88rem; margin:0.75rem 0; display:flex; align-items:flex-start; gap:0.6rem; }
+.info-box.info { background:var(--accent-soft); border-left:4px solid var(--accent); color:var(--accent); }
+.info-box.warn { background:var(--warning-bg); border-left:4px solid var(--warning); color:var(--warning); }
+.info-box.danger { background:var(--danger-bg); border-left:4px solid var(--danger); color:var(--danger); }
+.info-box.tip { background:var(--success-bg); border-left:4px solid var(--success); color:var(--success); }
+.info-box .ib-icon { font-size:1.1rem; flex-shrink:0; margin-top:0.05rem; }
+code { background:var(--bg-subtle); padding:0.15rem 0.4rem; border-radius:4px; font-size:0.82rem; font-family:'SF Mono',Monaco,Consolas,monospace; color:var(--accent); }
+.ts-item { margin-bottom:0.75rem; }
+.ts-problem { font-weight:600; color:var(--danger); font-size:0.9rem; }
+.ts-solution { font-size:0.88rem; color:var(--text-secondary); margin-top:0.2rem; padding-left:1rem; }
+.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:1rem; }
+strong { color:var(--text-primary); } a { color:var(--accent); }
+p { margin-bottom:0.5rem; } ul,ol { margin-left:1.25rem; margin-bottom:0.5rem; }
+li { margin-bottom:0.2rem; font-size:0.9rem; } hr { border:none; border-top:1px solid var(--border-default); margin:1.5rem 0; }
+@media (max-width:768px) {
+  .header h1 { font-size:1.6rem; } .qr-grid { grid-template-columns:1fr; }
+  .toc-grid { grid-template-columns:1fr; } .grid-2 { grid-template-columns:1fr; }
+  .flow { flex-direction:column; } .flow-arrow { transform:rotate(90deg); }
+  .container { padding:0 1rem 3rem; }
+}
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <div class="header-inner">
+    <a href="index.html#sitemap" class="header-back">&#x2190; Back to Site Map</a>
+    <h1>&#x1F4B0; Profit &amp; Loss</h1>
+    <div class="subtitle">Standard Operating Procedure &mdash; Real-time P&amp;L reporting with AI analysis, interactive charts, and inline transaction editing</div>
+    <div class="version">Version 2.12 &bull; 17 Apr 2026 &bull; Owner: Kevin Brittain</div>
+  </div>
+</div>
+
+<div class="container">
+
+<!-- QUICK REFERENCE -->
+<div class="quick-ref">
+  <h2>&#x26A1; Quick Reference</h2>
+  <div class="qr-grid">
+    <div class="qr-item">
+      <div class="qr-label">Access</div>
+      <div class="qr-value"><a href="index.html#pnl">index.html#pnl</a></div>
+    </div>
+    <div class="qr-item">
+      <div class="qr-label">Source File</div>
+      <div class="qr-value"><code>js/pnl.js</code> (795 lines)</div>
+    </div>
+    <div class="qr-item">
+      <div class="qr-label">Data Source</div>
+      <div class="qr-value">Airtable &mdash; Transactions table (<code>tbln0gzhCAorFc3zB</code>)</div>
+    </div>
+    <div class="qr-item">
+      <div class="qr-label">Airtable Base</div>
+      <div class="qr-value"><code>appnqjDpqDniH3IRl</code></div>
+    </div>
+    <div class="qr-item">
+      <div class="qr-label">Key Amount Field</div>
+      <div class="qr-value">Report Amount &mdash; <code>fldot7iisZeL3WrdR</code></div>
+    </div>
+    <div class="qr-item">
+      <div class="qr-label">Business Options</div>
+      <div class="qr-value">Every business ticked <strong>Active</strong> in Airtable</div>
+    </div>
+    <div class="qr-item">
+      <div class="qr-label">Period Options</div>
+      <div class="qr-value">1 &middot; 3 &middot; 6 &middot; 12 months (default: 12)</div>
+    </div>
+    <div class="qr-item">
+      <div class="qr-label">Dependencies</div>
+      <div class="qr-value">Chart.js (CDN) &middot; Claude AI Proxy &middot; <code>allTransactions</code> (loaded by dashboard.js)</div>
+    </div>
+    <div class="qr-item">
+      <div class="qr-label">AI Model</div>
+      <div class="qr-value"><code>claude-sonnet-4-6</code> &middot; max 1,500 tokens</div>
+    </div>
+    <div class="qr-item">
+      <div class="qr-label">Auth Storage</div>
+      <div class="qr-value">localStorage key: <code>_dlr_pat</code></div>
+    </div>
+  </div>
+</div>
+
+<!-- TABLE OF CONTENTS -->
+<div class="section">
+  <div class="toc">
+    <h2>&#x1F4D1; Contents</h2>
+    <div class="toc-grid">
+      <a href="#overview"><span class="toc-num">1</span> Overview &amp; Purpose</a>
+      <a href="#access"><span class="toc-num">2</span> How to Access</a>
+      <a href="#dashboard-overview"><span class="toc-num">3</span> Dashboard Overview</a>
+      <a href="#charts"><span class="toc-num">4</span> Charts &amp; Visualisations</a>
+      <a href="#categories"><span class="toc-num">5</span> P&amp;L Categories</a>
+      <a href="#ai"><span class="toc-num">6</span> AI Analysis Feature</a>
+      <a href="#drill"><span class="toc-num">7</span> Drill-Down &amp; Editing</a>
+      <a href="#filters"><span class="toc-num">8</span> Filtering &amp; Date Range</a>
+      <a href="#buttons"><span class="toc-num">9</span> Action Buttons Reference</a>
+      <a href="#fields"><span class="toc-num">10</span> Airtable Fields Reference</a>
+      <a href="#troubleshooting"><span class="toc-num">11</span> Troubleshooting</a>
+      <a href="#changelog"><span class="toc-num">12</span> Changelog</a>
+    </div>
+  </div>
+</div>
+
+<!-- 1. OVERVIEW -->
+<div class="section" id="overview">
+  <h2 class="section-title"><span class="icon">&#x1F3AF;</span> 1. Overview &amp; Purpose</h2>
+  <div class="card">
+    <p>The Profit &amp; Loss page provides a real-time financial performance view for the business, built from <strong>every categorised transaction</strong> stored in Airtable, whether or not it has been reconciled. A transaction is included when it has a business, a date inside the reporting window, and a sub-category on the P&amp;L allow-list. Reconciliation status is not part of that test. The page renders a multi-section P&amp;L grid, nine KPI cards, four interactive charts, and an AI-powered analysis panel, all from the same underlying dataset.</p>
+    <div class="info-box info">
+      <span class="ib-icon">&#x2139;&#xFE0F;</span>
+      <div><strong>How much of it is reconciled:</strong> the sync bar at the top of the page reports the percentage of loaded transactions that are reconciled, next to the total count. That figure is context only. Reducing it does not remove anything from the P&amp;L, and an unreconciled transaction still counts in full.</div>
+    </div>
+    <div class="info-box info">
+      <span class="ib-icon">&#x2139;&#xFE0F;</span>
+      <div><strong>Scope:</strong> Covers Revenue, Cost of Goods Sold (COGS), and Operating Expenses (OpEx) for the <strong>Real Estate</strong> and <strong>Operations Director</strong> businesses. Capital expenditure, loans, transfers, balance-sheet items, and personal transactions are explicitly excluded — they carry sub-categories not in the allow-list and are silently skipped.</div>
+    </div>
+    <div class="info-box warn">
+      <span class="ib-icon">&#x26A0;&#xFE0F;</span>
+      <div><strong>Dependency:</strong> The P&amp;L page reads from the global <code>allTransactions</code> array, which is loaded by the Leadership Dashboard tab. If you navigate directly to the P&amp;L tab without first opening the Dashboard, the page will display a loading message. Open the Dashboard tab first to populate the data, then switch back.</div>
+    </div>
+    <p>The primary financial targets the report measures against:</p>
+    <table class="label-table" style="margin-top:0.75rem">
+      <thead>
+        <tr><th>Metric</th><th>Monthly Target</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Revenue</strong></td>
+          <td><span class="label-badge lb-blue">&pound;35,000/mo</span></td>
+          <td>Constant <code>PNL_REVENUE_TARGET = 35000</code></td>
+        </tr>
+        <tr>
+          <td><strong>Gross Profit Margin</strong></td>
+          <td><span class="label-badge lb-blue">80%</span></td>
+          <td>Constant <code>PNL_GROSS_MARGIN_TARGET = 80</code></td>
+        </tr>
+        <tr>
+          <td><strong>Net Profit</strong></td>
+          <td><span class="label-badge lb-green">&pound;5,000/mo</span></td>
+          <td>Constant <code>PNL_CLEAR_PROFIT_TARGET = 5000</code></td>
+        </tr>
+        <tr>
+          <td><strong>Net Profit Margin</strong></td>
+          <td><span class="label-badge lb-green">15%</span></td>
+          <td>Constant <code>PNL_NET_MARGIN_TARGET = 15</code></td>
+        </tr>
+        <tr>
+          <td><strong>Maintenance Budget</strong></td>
+          <td><span class="label-badge lb-amber">&pound;1,000/mo</span></td>
+          <td>Constant <code>PNL_MAINT_TARGET</code> (falls back to <code>MAINT_TARGET_GBP = 1000</code> from config.js)</td>
+        </tr>
+        <tr>
+          <td><strong>Wages Budget</strong></td>
+          <td><span class="label-badge lb-amber">&pound;1,500/mo</span></td>
+          <td>Constant <code>PNL_WAGES_TARGET</code> (falls back to <code>WAGES_TARGET_GBP = 1500</code> from config.js)</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 2. HOW TO ACCESS -->
+<div class="section" id="access">
+  <h2 class="section-title"><span class="icon">&#x1F511;</span> 2. How to Access</h2>
+
+  <div class="wf-card">
+    <div class="wf-header">
+      <div class="wf-num">1</div>
+      <h3>First-time setup</h3>
+      <span class="wf-tag">one-off</span>
+    </div>
+    <div class="wf-body">
+      <ol class="steps">
+        <li>Open <a href="index.html">index.html</a> in your browser.</li>
+        <li>On the authentication screen, paste your Airtable Personal Access Token (PAT) into the input field and press <strong>Enter</strong> or click the sign-in button.</li>
+        <li>The token is saved to <code>localStorage</code> under the key <code>_dlr_pat</code> and will be used automatically on future visits.</li>
+        <li>The Leadership Dashboard loads, populating <code>allTransactions</code> and other global arrays.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="wf-card">
+    <div class="wf-header">
+      <div class="wf-num">2</div>
+      <h3>Navigate to P&amp;L</h3>
+      <span class="wf-tag">every visit</span>
+    </div>
+    <div class="wf-body">
+      <ol class="steps">
+        <li>In the left sidebar, click <strong>&#x1F4B0; Profit &amp; Loss</strong>. This calls <code>switchTab('pnl')</code>.</li>
+        <li>The tab panel <code>id="tab-pnl"</code> becomes visible and <code>renderPnL()</code> is called.</li>
+        <li>The report builds immediately from the in-memory <code>allTransactions</code> array — no additional network request is made.</li>
+        <li>Charts render on the next animation frame via <code>requestAnimationFrame</code> to avoid layout thrash.</li>
+      </ol>
+      <div class="info-box tip">
+        <span class="ib-icon">&#x1F4A1;</span>
+        <div>You can also deep-link directly to <a href="index.html#pnl">index.html#pnl</a>. The platform will restore the PAT from localStorage and switch to the P&amp;L tab automatically.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 3. DASHBOARD OVERVIEW -->
+<div class="section" id="dashboard-overview">
+  <h2 class="section-title"><span class="icon">&#x1F4CA;</span> 3. Dashboard Overview</h2>
+
+  <div class="card">
+    <div class="card-header">&#x1F5FA;&#xFE0F; Page Layout (Top to Bottom)</div>
+    <div class="flow">
+      <div class="flow-step purple">
+        <span class="flow-icon">&#x1F916;</span>
+        AI Analysis
+        <div class="flow-sub">Manual trigger</div>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-step primary">
+        <span class="flow-icon">&#x1F4CA;</span>
+        KPI Cards
+        <div class="flow-sub">3 rows &middot; 9 cards</div>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-step warning">
+        <span class="flow-icon">&#x1F4C8;</span>
+        Charts
+        <div class="flow-sub">4 charts &middot; 2&times;2 grid</div>
+      </div>
+      <div class="flow-arrow">&rarr;</div>
+      <div class="flow-step success">
+        <span class="flow-icon">&#x1F4CB;</span>
+        P&amp;L Grid
+        <div class="flow-sub">Frozen row &amp; column</div>
+      </div>
+    </div>
+    <p style="font-size:0.88rem;color:var(--text-secondary);margin-top:0.5rem">At the very top of the section, two dropdowns let you change the <strong>Business</strong> and <strong>Period</strong> before any of the above content. Changing either selector calls <code>renderPnL()</code> immediately and re-renders the entire page.</p>
+  </div>
+
+  <div class="card">
+    <div class="card-header">&#x1F4B3; KPI Cards — 3 Rows, 9 Cards</div>
+    <p>Each card shows the period total, a per-month average, and a coloured indicator comparing the figure against its target. Green with an up-arrow means above target (good for profit, bad for costs). Red with a down-arrow means below target (or over budget).</p>
+
+    <h4 style="margin-top:1rem;font-size:0.9rem;font-weight:600;color:var(--text-secondary)">Row 1 &mdash; Top-Line Figures</h4>
+    <table class="label-table" style="margin-bottom:1rem">
+      <thead>
+        <tr><th>Card</th><th>What it shows</th><th>Target comparison</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Revenue</strong></td>
+          <td>Period total &amp; average per month</td>
+          <td>&pound;35,000/mo &times; selected months. Green = above target.</td>
+        </tr>
+        <tr>
+          <td><strong>Cost of Goods Sold</strong></td>
+          <td>Period total, avg/mo, % of revenue</td>
+          <td>No fixed target; arrow inverted (lower = green).</td>
+        </tr>
+        <tr>
+          <td><strong>Operating Expenses</strong></td>
+          <td>Period total, avg/mo, % of revenue</td>
+          <td>No fixed target; arrow inverted (lower = green).</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h4 style="font-size:0.9rem;font-weight:600;color:var(--text-secondary)">Row 2 &mdash; Profitability</h4>
+    <table class="label-table" style="margin-bottom:1rem">
+      <thead>
+        <tr><th>Card</th><th>What it shows</th><th>Target comparison</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Gross Profit</strong></td>
+          <td>Period total &amp; avg/mo. No target indicator.</td>
+          <td>&mdash;</td>
+        </tr>
+        <tr>
+          <td><strong>Gross Margin</strong></td>
+          <td>Gross Profit &divide; Revenue &times; 100 (period total basis)</td>
+          <td>80% target. Shows percentage-point gap (pp).</td>
+        </tr>
+        <tr>
+          <td><strong>Net Profit</strong></td>
+          <td>Period total &amp; avg/mo</td>
+          <td>&pound;5,000/mo &times; selected months. Green = above target.</td>
+        </tr>
+        <tr>
+          <td><strong>Net Margin</strong></td>
+          <td>Net Profit &divide; Revenue &times; 100 (period total basis)</td>
+          <td>15% target. Shows pp gap.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h4 style="font-size:0.9rem;font-weight:600;color:var(--text-secondary)">Row 3 &mdash; Budget Tracking</h4>
+    <table class="label-table">
+      <thead>
+        <tr><th>Card</th><th>What it shows</th><th>How calculated</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Avg Monthly Maintenance</strong></td>
+          <td>Average per month &amp; % of avg revenue. Budget: &pound;1,000/mo.</td>
+          <td>Sub-category <em>COGS Property Reactive Maintenance</em> period total &divide; months</td>
+        </tr>
+        <tr>
+          <td><strong>Avg Monthly Wages</strong></td>
+          <td>Average per month &amp; % of avg revenue. Budget: &pound;1,500/mo.</td>
+          <td>(<em>COGS Labour</em> total + <em>Opex Labour</em> total) &divide; months</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="info-box info" style="margin-top:1rem">
+      <span class="ib-icon">&#x2139;&#xFE0F;</span>
+      <div>A zero value in any cell displays as a dash (<code>&ndash;</code>). Negative values display in accounting parenthesis format: <code>(£1,234)</code> in red. The function <code>pnlFmt()</code> handles this formatting throughout the page.</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">&#x1F4CB; P&amp;L Grid</div>
+    <p>Below the charts sits a scrollable spreadsheet-style table showing each sub-category by month column. The header row (month labels) and the leftmost column (line item names) are both sticky — they freeze in place when you scroll horizontally or vertically.</p>
+    <ul>
+      <li>The grid is constrained to <code>max-height: 85vh</code> with internal scroll.</li>
+      <li>Section headers (Revenue, Cost of Goods Sold, Operating Expenses) appear as dark full-width rows in uppercase.</li>
+      <li>Total rows (Total Revenue, Total COGS, Gross Profit, Total Operating Expenses, Net Profit) appear in colour-coded rows.</li>
+      <li>Margin rows (Gross Profit Margin %, Net Profit Margin %) appear in italic below their corresponding profit rows.</li>
+      <li>Any cell that has underlying transactions is clickable and opens the drill-down modal (see Section 7).</li>
+      <li>A summary footnote below the grid restates the active targets for reference.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- 4. CHARTS -->
+<div class="section" id="charts">
+  <h2 class="section-title"><span class="icon">&#x1F4C8;</span> 4. Charts &amp; Visualisations</h2>
+
+  <div class="card">
+    <p>Four Chart.js charts render in a <strong>2&times;2 grid</strong>, each in a white card at 380 px height (the Expense Breakdown card is 420 px). Charts are destroyed and re-created on every <code>renderPnL()</code> call to prevent canvas leaks. If Chart.js has not loaded from CDN, the chart area is skipped silently.</p>
+  </div>
+
+  <div class="wf-card">
+    <div class="wf-header">
+      <div class="wf-num">1</div>
+      <h3>Revenue vs Expenses</h3>
+      <span class="wf-tag">grouped bar chart</span>
+    </div>
+    <div class="wf-body">
+      <p>Canvas ID: <code>pnlChartRevExp</code>. Three dataset bars per month:</p>
+      <ul>
+        <li><strong style="color:var(--accent)">Revenue</strong> (sage green, <code>var(--accent)</code> / <code>#2C6E49</code>) — positive values</li>
+        <li><strong style="color:var(--danger)">COGS</strong> (red, <code>var(--danger)</code> / <code>#A33B3B</code>) — displayed as negative (inverted)</li>
+        <li><strong style="color:var(--tone-gold)">OpEx</strong> (gold, <code>var(--tone-gold)</code> / <code>#B8933A</code>) — displayed as negative (inverted)</li>
+      </ul>
+      <p>Y-axis labels use abbreviated thousands: <code>£10k</code>, <code>£20k</code>, etc. Tooltip shows the absolute &pound; value with the dataset label.</p>
+    </div>
+  </div>
+
+  <div class="wf-card">
+    <div class="wf-header">
+      <div class="wf-num">2</div>
+      <h3>Profit Trend</h3>
+      <span class="wf-tag">line chart with target</span>
+    </div>
+    <div class="wf-body">
+      <p>Canvas ID: <code>pnlChartProfit</code>. Three datasets:</p>
+      <ul>
+        <li><strong>Gross Profit</strong> — blue line (<code>var(--info)</code> / <code>#3560A8</code>) with light-blue fill, tension 0.3</li>
+        <li><strong>Net Profit</strong> — sage green line (<code>var(--accent)</code> / <code>#2C6E49</code>) with light-green fill, tension 0.3</li>
+        <li><strong>NP Target (£5k/mo)</strong> — red dashed line (<code>var(--danger)</code> / <code>#A33B3B</code>, <code>borderDash: [6,4]</code>), no fill, no data points</li>
+      </ul>
+      <p>Y-axis uses <code>£Xk</code> format. Tooltip shows <code>£</code> value rounded to nearest integer.</p>
+    </div>
+  </div>
+
+  <div class="wf-card">
+    <div class="wf-header">
+      <div class="wf-num">3</div>
+      <h3>Profit Margin Trend</h3>
+      <span class="wf-tag">line chart with two targets</span>
+    </div>
+    <div class="wf-body">
+      <p>Canvas ID: <code>pnlChartMargin</code>. Four datasets:</p>
+      <ul>
+        <li><strong>Gross Margin %</strong> — blue line with light-blue fill</li>
+        <li><strong>Net Margin %</strong> — green line with light-green fill</li>
+        <li><strong>GP Target (80%)</strong> — blue dashed reference line, no fill, no data points</li>
+        <li><strong>NP Target (15%)</strong> — red dashed reference line, no fill, no data points</li>
+      </ul>
+      <p>Y-axis labels show <code>%</code> suffix. Tooltip shows one decimal place.</p>
+    </div>
+  </div>
+
+  <div class="wf-card">
+    <div class="wf-header">
+      <div class="wf-num">4</div>
+      <h3>Expense Breakdown</h3>
+      <span class="wf-tag">doughnut chart</span>
+    </div>
+    <div class="wf-body">
+      <p>Canvas ID: <code>pnlChartBreakdown</code>. Shows all COGS and OpEx sub-categories that have a non-zero period total, sorted by size descending. Up to 24 colour slices are supported.</p>
+      <ul>
+        <li>Cutout is 55% (ring style).</li>
+        <li>Legend appears at the bottom, up to 120 px tall, with small circles.</li>
+        <li>Tooltip shows sub-category name, absolute &pound; total, and percentage of all expenses.</li>
+        <li>Sub-categories with zero spend are excluded from the chart.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- 5. P&L CATEGORIES -->
+<div class="section" id="categories">
+  <h2 class="section-title"><span class="icon">&#x1F4CB;</span> 5. P&amp;L Categories</h2>
+
+  <div class="card">
+    <p>The P&amp;L uses an <strong>explicit allow-list</strong> of <strong>27 sub-categories</strong> defined in the constant <code>PNL_SECTIONS</code>. Any transaction whose <code>Chart of Accounts Sub-Category</code> link resolves to a name <em>not</em> in this list is silently excluded from the report. The order below matches the order rows appear in the grid.</p>
+
+    <div class="info-box info">
+      <span class="ib-icon">&#x2139;&#xFE0F;</span>
+      <div><strong>Sign convention:</strong> Revenue amounts are added as positive. COGS and OpEx amounts are negated (subtracted) when accumulating totals. Gross Profit = Revenue &minus; COGS. Net Profit = Gross Profit &minus; Operating Expenses.</div>
+    </div>
+
+    <div class="grid-2" style="margin-top:1rem">
+      <div>
+        <h4 style="margin-bottom:0.5rem;color:var(--text-secondary);font-size:0.9rem">&#x1F4B5; Revenue (3 sub-categories)</h4>
+        <table class="label-table">
+          <thead><tr><th>#</th><th>Sub-Category Name</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Fixed Income</td></tr>
+            <tr><td>2</td><td>Variable Income</td></tr>
+            <tr><td>3</td><td>Rental Income</td></tr>
+          </tbody>
+        </table>
+
+        <h4 style="margin-top:1.25rem;margin-bottom:0.5rem;color:var(--text-secondary);font-size:0.9rem">&#x1F6D2; Cost of Goods Sold (9 sub-categories)</h4>
+        <table class="label-table">
+          <thead><tr><th>#</th><th>Sub-Category Name</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>COGS Labour</td></tr>
+            <tr><td>2</td><td>COGS Sales Fees</td></tr>
+            <tr><td>3</td><td>COGS Product Costs</td></tr>
+            <tr><td>4</td><td>COGS Delivery Costs</td></tr>
+            <tr><td>5</td><td>COGS Commission</td></tr>
+            <tr><td>6</td><td>COGS Property Council Tax</td></tr>
+            <tr><td>7</td><td>COGS Property Utilities</td></tr>
+            <tr><td>8</td><td>COGS Property Reactive Maintenance</td></tr>
+            <tr><td>9</td><td>COGS Property Compliance</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div>
+        <h4 style="margin-bottom:0.5rem;color:var(--text-secondary);font-size:0.9rem">&#x1F4CA; Operating Expenses (15 sub-categories)</h4>
+        <table class="label-table">
+          <thead><tr><th>#</th><th>Sub-Category Name</th></tr></thead>
+          <tbody>
+            <tr><td>1</td><td>Opex Labour</td></tr>
+            <tr><td>2</td><td>Marketing</td></tr>
+            <tr><td>3</td><td>Premises / Overheads</td></tr>
+            <tr><td>4</td><td>Insurance</td></tr>
+            <tr><td>5</td><td>Software &amp; Subscriptions</td></tr>
+            <tr><td>6</td><td>Professional Fees</td></tr>
+            <tr><td>7</td><td>Travel &amp; Training</td></tr>
+            <tr><td>8</td><td>Operational Supplies</td></tr>
+            <tr><td>9</td><td>Subsistence</td></tr>
+            <tr><td>10</td><td>Director Discretionary Expenses</td></tr>
+            <tr><td>11</td><td>Charity</td></tr>
+            <tr><td>12</td><td>Mortgage Interest</td></tr>
+            <tr><td>13</td><td>Loan Interest</td></tr>
+            <tr><td>14</td><td>Bank Transaction Fees</td></tr>
+            <tr><td>15</td><td>Tax</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 6. AI ANALYSIS -->
+<div class="section" id="ai">
+  <h2 class="section-title"><span class="icon">&#x1F916;</span> 6. AI Analysis Feature</h2>
+
+  <div class="card">
+    <p>An AI analysis panel sits at the top of the page, above the KPI cards. It is triggered manually and calls the Claude proxy with a structured JSON summary of the current P&amp;L data.</p>
+  </div>
+
+  <div class="wf-card">
+    <div class="wf-header">
+      <div class="wf-num">1</div>
+      <h3>Generating an Analysis</h3>
+      <span class="wf-tag">manual trigger</span>
+    </div>
+    <div class="wf-body">
+      <ol class="steps">
+        <li>Click <strong>Generate Analysis</strong> in the AI panel. The button calls <code>pnlRunAIAnalysis()</code>.</li>
+        <li>The panel immediately shows three animated dots labelled <em>Analysing P&amp;L data…</em> while the request is in flight.</li>
+        <li>The function builds a JSON context object (<code>pnlBuildAIContext()</code>) containing: business name, period, all six targets, grand totals, a month-by-month breakdown (revenue / COGS / OpEx / gross profit / gross margin / net profit / net margin per month), and the top 10 expense sub-categories by period total.</li>
+        <li>The request is sent via <code>POST</code> to the AI proxy endpoint (<code>AI_PROXY</code>, defined in <code>js/ai-assistant.js</code> as <code>https://claude-proxy.kevinbrittain.workers.dev</code>). Model: <code>claude-sonnet-4-6</code>, max tokens: 1,500.</li>
+        <li>The response is rendered using <code>renderMarkdown()</code> (defined in <code>js/ai-assistant.js</code>) so bold text, bullet lists, and headers display correctly.</li>
+        <li>A <strong>&#x21BB; Refresh Analysis</strong> button appears below the output to regenerate at any time.</li>
+      </ol>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">&#x1F4DD; AI Response Structure</div>
+    <p>The system prompt instructs the AI to return its analysis in exactly this structure, in British English, under 350 words:</p>
+    <ol class="steps">
+      <li><strong>Performance Summary</strong> — 2–3 sentences on overall position</li>
+      <li><strong>Key Trends</strong> — 3–4 bullet points on patterns across the period</li>
+      <li><strong>Areas of Concern</strong> — 2–3 bullets on problems or risks</li>
+      <li><strong>Opportunities</strong> — 2–3 bullets on cost savings or revenue improvements</li>
+      <li><strong>Path to 15% Net Margin</strong> — specific actions with &pound; amounts needed to reach the net margin target</li>
+    </ol>
+    <div class="info-box tip">
+      <span class="ib-icon">&#x1F4A1;</span>
+      <div>The AI is instructed to compare against all six targets (revenue, gross margin, net profit, net margin, maintenance, wages) and flag any months where net profit was negative or margin dropped sharply.</div>
+    </div>
+    <div class="info-box warn">
+      <span class="ib-icon">&#x26A0;&#xFE0F;</span>
+      <div><strong>One request at a time:</strong> the flag <code>_pnlAiLoading</code> prevents concurrent requests. Clicking <strong>Generate Analysis</strong> while one is in flight is ignored. If the request fails, a <strong>Retry</strong> button appears in the panel.</div>
+    </div>
+  </div>
+</div>
+
+<!-- 7. DRILL-DOWN & EDITING -->
+<div class="section" id="drill">
+  <h2 class="section-title"><span class="icon">&#x1F50D;</span> 7. Drill-Down &amp; Editing</h2>
+
+  <div class="card">
+    <p>Clicking any non-zero cell in the P&amp;L grid opens a full-screen modal overlay showing the underlying transactions. The function <code>pnlDrill(scope, section, subCat, monthKey)</code> handles four click types:</p>
+    <table class="label-table">
+      <thead>
+        <tr><th>Click target</th><th>Scope value</th><th>Transactions shown</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>A single month cell on a sub-category row</td>
+          <td><code>cell</code></td>
+          <td>That sub-category in that specific month only</td>
+        </tr>
+        <tr>
+          <td>The <strong>Total</strong> column on a sub-category row</td>
+          <td><code>subTotal</code></td>
+          <td>All months for that sub-category</td>
+        </tr>
+        <tr>
+          <td>A month cell on a section total row (e.g. Total Revenue)</td>
+          <td><code>monthTotal</code></td>
+          <td>All sub-categories in that section for that month</td>
+        </tr>
+        <tr>
+          <td>The Total column on a section total row</td>
+          <td><code>sectionTotal</code></td>
+          <td>All sub-categories in that section across all months</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="info-box info">
+      <span class="ib-icon">&#x2139;&#xFE0F;</span>
+      <div>Transactions are sorted newest-first by date. The modal header shows the transaction count and the running sum of all Report Amount values.</div>
+    </div>
+  </div>
+
+  <div class="wf-card">
+    <div class="wf-header">
+      <div class="wf-num">2</div>
+      <h3>Modal Columns &amp; Inline Editing</h3>
+      <span class="wf-tag">saves instantly to Airtable</span>
+    </div>
+    <div class="wf-body">
+      <table class="label-table">
+        <thead>
+          <tr><th>Column</th><th>Editable?</th><th>Notes</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><strong>Date</strong></td>
+            <td><span class="label-badge lb-red">Read-only</span></td>
+            <td>Transaction date from the <code>Date</code> field</td>
+          </tr>
+          <tr>
+            <td><strong>Transaction Detail</strong></td>
+            <td><span class="label-badge lb-red">Read-only</span></td>
+            <td>Vendor name if present; falls back to description (<code>txLabel()</code>)</td>
+          </tr>
+          <tr>
+            <td><strong>Report Amount</strong></td>
+            <td><span class="label-badge lb-red">Read-only</span></td>
+            <td>Green for positive, red for negative. Shown with 2 decimal places.</td>
+          </tr>
+          <tr>
+            <td><strong>Category</strong></td>
+            <td><span class="label-badge lb-green">Editable</span></td>
+            <td>Type-ahead search against all <code>allCategories</code> records. Links the <code>Chart of Accounts - Category</code> field.</td>
+          </tr>
+          <tr>
+            <td><strong>Sub-Category</strong></td>
+            <td><span class="label-badge lb-green">Editable</span></td>
+            <td>Type-ahead search against all <code>allSubCategories</code> records. Links the <code>Chart of Accounts Sub-Category</code> field. Changing this can move the transaction to a different P&amp;L line.</td>
+          </tr>
+          <tr>
+            <td><strong>Business (For Reports)</strong></td>
+            <td><span class="label-badge lb-green">Editable</span></td>
+            <td>Type-ahead search against all <code>allBusinesses</code> records. Changing this can move a transaction out of (or into) the current business filter.</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="info-box warn" style="margin-top:0.75rem">
+        <span class="ib-icon">&#x26A0;&#xFE0F;</span>
+        <div><strong>Changes save immediately.</strong> Each edit fires a <code>PATCH</code> request to Airtable (<code>https://api.airtable.com/v0/{BASE_ID}/tbln0gzhCAorFc3zB/{txId}</code>) using <code>returnFieldsByFieldId: true</code>. A <code>&#x2713;</code> appears in the status column on success, or <code>&#x2717; error message</code> on failure. There is no undo.</div>
+      </div>
+      <div class="info-box tip">
+        <span class="ib-icon">&#x1F4A1;</span>
+        <div><strong>Auto-refresh on close:</strong> If any edit was saved during the modal session (tracked by <code>_pnlEditsMade</code>), closing the modal automatically calls <code>renderPnL()</code> to reflect the changes in the grid. The modal closes when you click outside it, press <strong>Escape</strong>, or click the <strong>&times;</strong> button.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 8. FILTERING & DATE RANGE -->
+<div class="section" id="filters">
+  <h2 class="section-title"><span class="icon">&#x1F4C5;</span> 8. Filtering &amp; Date Range</h2>
+
+  <div class="card">
+    <p>Two dropdown selectors appear at the top-right of the page heading. Both call <code>renderPnL()</code> immediately on change — no submit button is needed.</p>
+    <table class="label-table">
+      <thead>
+        <tr><th>Selector</th><th>ID in DOM</th><th>Options</th><th>Default</th><th>State variable</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Business</strong></td>
+          <td><code>pnlBizSelect</code></td>
+          <td>Every business with <strong>Active</strong> ticked on the Businesses table</td>
+          <td>Real Estate</td>
+          <td><code>pnlBusinessName</code></td>
+        </tr>
+        <tr>
+          <td><strong>Period</strong></td>
+          <td><code>pnlMonthsSelect</code></td>
+          <td>1 month &middot; 3 months &middot; 6 months &middot; 12 months</td>
+          <td>12 months</td>
+          <td><code>pnlMonths</code></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="info-box info" style="margin-top:0.75rem">
+      <span class="ib-icon">&#x2139;&#xFE0F;</span>
+      <div><strong>How trailing months work:</strong> The function <code>pnlMonthKeys(n)</code> generates <em>n</em> month keys ending with the current calendar month. For example, with Period = 3 and today being April 2026, it returns Feb 2026, Mar 2026, Apr 2026. Months are expressed as <code>YYYY-MM</code> keys internally and displayed as <code>MMM YY</code> in headers (e.g. <code>Apr 26</code>).</div>
+    </div>
+    <div class="info-box info">
+      <span class="ib-icon">&#x2139;&#xFE0F;</span>
+      <div><strong>Business filtering:</strong> The <code>buildPnL()</code> function resolves each transaction's <code>Business (For Reports)</code> linked field and includes only transactions where the resolved name matches the selected business exactly. The dropdown is <strong>not</strong> a fixed list. It is built at render time from every business with the <strong>Active</strong> checkbox ticked on the Businesses table, so ticking or unticking Active adds or removes an option. The old hard-coded pair in <code>PNL_TOP_BUSINESSES</code> is now only a fallback, used if the Active flag has not been set on any business.</div>
+    </div>
+    <div class="info-box warn">
+      <span class="ib-icon">&#x26A0;&#xFE0F;</span>
+      <div><strong>If the business you are looking at is deactivated:</strong> the page keeps showing that company's figures and puts an amber notice under the page heading saying it is no longer Active. Its name stays in the dropdown, marked <code>(not active)</code>. The page never quietly swaps you onto a different company's books, which is what it used to do.</div>
+    </div>
+  </div>
+</div>
+
+<!-- 9. ACTION BUTTONS -->
+<div class="section" id="buttons">
+  <h2 class="section-title"><span class="icon">&#x1F518;</span> 9. Action Buttons Reference</h2>
+
+  <div class="card">
+    <table class="label-table">
+      <thead>
+        <tr><th>Button Label</th><th>Location</th><th>Function called</th><th>What it does</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Generate Analysis</strong></td>
+          <td>AI Analysis panel</td>
+          <td><code>pnlRunAIAnalysis()</code></td>
+          <td>Sends the full P&amp;L context to Claude Sonnet and renders the AI analysis. Disabled (ignored) if a request is already in flight.</td>
+        </tr>
+        <tr>
+          <td><strong>&#x21BB; Refresh Analysis</strong></td>
+          <td>AI Analysis panel (after result)</td>
+          <td><code>pnlRunAIAnalysis()</code></td>
+          <td>Regenerates the AI analysis with the current data. Replaces the existing result.</td>
+        </tr>
+        <tr>
+          <td><strong>Retry</strong></td>
+          <td>AI Analysis panel (on error)</td>
+          <td><code>pnlRunAIAnalysis()</code></td>
+          <td>Re-attempts the AI analysis after a failure. Shown in the error message inline.</td>
+        </tr>
+        <tr>
+          <td><strong>Business dropdown</strong></td>
+          <td>Page header, right side</td>
+          <td><code>pnlBusinessName = this.value; renderPnL()</code></td>
+          <td>Filters the entire report to the selected business and re-renders.</td>
+        </tr>
+        <tr>
+          <td><strong>Period dropdown</strong></td>
+          <td>Page header, right side</td>
+          <td><code>pnlMonths = Number(this.value); renderPnL()</code></td>
+          <td>Changes the trailing-months window and re-renders the entire report.</td>
+        </tr>
+        <tr>
+          <td><strong>Any clickable P&amp;L grid cell</strong></td>
+          <td>P&amp;L grid table</td>
+          <td><code>pnlDrill(scope, section, subCat, monthKey)</code></td>
+          <td>Opens the drill-down modal for the corresponding slice of transactions.</td>
+        </tr>
+        <tr>
+          <td><strong>&times; (close)</strong></td>
+          <td>Drill-down modal header</td>
+          <td><code>pnlCloseDrill()</code></td>
+          <td>Closes the modal. If any edits were made, also calls <code>renderPnL()</code>.</td>
+        </tr>
+        <tr>
+          <td><strong>Click outside modal</strong></td>
+          <td>Modal overlay</td>
+          <td><code>pnlCloseDrill()</code></td>
+          <td>Same as clicking &times;.</td>
+        </tr>
+        <tr>
+          <td><strong>Escape key</strong></td>
+          <td>Keyboard (while modal open)</td>
+          <td><code>pnlEscHandler() &rarr; pnlCloseDrill()</code></td>
+          <td>Same as clicking &times;.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 10. AIRTABLE FIELDS REFERENCE -->
+<div class="section" id="fields">
+  <h2 class="section-title"><span class="icon">&#x1F5C4;&#xFE0F;</span> 10. Airtable Fields Reference</h2>
+
+  <div class="card">
+    <div class="card-header">Transactions Table (<code>tbln0gzhCAorFc3zB</code>) — Fields used by pnl.js</div>
+    <table class="label-table">
+      <thead>
+        <tr><th>Human Name</th><th>Field ID</th><th>Type</th><th>How P&amp;L uses it</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Report Amount</strong></td>
+          <td><code>fldot7iisZeL3WrdR</code></td>
+          <td>Formula (GBP)</td>
+          <td>Primary amount field. Used for all calculations and display. Normalises multi-currency transactions. <em>Never use the raw Amount field.</em></td>
+        </tr>
+        <tr>
+          <td><strong>Date</strong></td>
+          <td><code>fldoyQ6Rr9cHp3bgQ</code></td>
+          <td>Date</td>
+          <td>Used to assign each transaction to a <code>YYYY-MM</code> month bucket. Transactions with no date are skipped.</td>
+        </tr>
+        <tr>
+          <td><strong>Chart of Accounts Sub-Category</strong></td>
+          <td><code>fldMRjSVzZVYeHb0A</code></td>
+          <td>Linked record (Sub-Categories table)</td>
+          <td>Resolved against <code>allSubCategories</code> (name field <code>fldO4BTJhFv5EsN6i</code>) to determine which P&amp;L section and row the transaction belongs to. Transactions with an unrecognised sub-category are excluded.</td>
+        </tr>
+        <tr>
+          <td><strong>Business (For Reports)</strong></td>
+          <td><code>fldX1aFlJyzpXGhbF</code></td>
+          <td>Linked record (Businesses table)</td>
+          <td>Resolved against <code>allBusinesses</code> (name field <code>fldbbRqVxLxUdHwIR</code>). Only transactions matching the selected business are included. Editable in the drill-down modal.</td>
+        </tr>
+        <tr>
+          <td><strong>Chart of Accounts - Category</strong></td>
+          <td><code>fldFPmNixqHPQy4D6</code></td>
+          <td>Linked record (Categories table)</td>
+          <td>Not used for filtering, but shown as an editable column in the drill-down modal. Resolved against <code>allCategories</code> (name field <code>fldii4oUzSfmplihO</code>).</td>
+        </tr>
+        <tr>
+          <td><strong>Vendor</strong></td>
+          <td><code>fld0Xr8sboQ0ekJQJ</code></td>
+          <td>Text</td>
+          <td>Used by <code>txLabel()</code> as the primary label in the drill-down transaction detail column.</td>
+        </tr>
+        <tr>
+          <td><strong>Description</strong></td>
+          <td><code>fldsbuAJCTsXHug4C</code></td>
+          <td>Text</td>
+          <td>Used by <code>txLabel()</code> as the fallback label when Vendor is blank.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-header">Lookup Tables used by pnl.js</div>
+    <table class="label-table">
+      <thead>
+        <tr><th>Table</th><th>Table ID</th><th>Name Field ID</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Sub-Categories</strong></td>
+          <td><code>tblOTdRcPf8AgRz25</code></td>
+          <td><code>fldO4BTJhFv5EsN6i</code></td>
+          <td>Resolves sub-category linked-record IDs to names for section assignment and the drill-down edit datalist.</td>
+        </tr>
+        <tr>
+          <td><strong>Categories</strong></td>
+          <td><code>tbleWb8ioptnEwPR8</code></td>
+          <td><code>fldii4oUzSfmplihO</code></td>
+          <td>Powers the Category type-ahead input in the drill-down modal.</td>
+        </tr>
+        <tr>
+          <td><strong>Businesses</strong></td>
+          <td><code>tblpqkvWJJo8Uu25q</code></td>
+          <td><code>fldbbRqVxLxUdHwIR</code></td>
+          <td>Resolves business links and powers the Business type-ahead input in the drill-down modal.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <div class="card-header">PATCH API call (inline edit)</div>
+    <p>When an edit input changes in the drill-down modal, <code>pnlEditTxField()</code> makes the following call:</p>
+    <ul style="margin-top:0.5rem">
+      <li><strong>Method:</strong> <code>PATCH</code></li>
+      <li><strong>URL:</strong> <code>https://api.airtable.com/v0/appnqjDpqDniH3IRl/tbln0gzhCAorFc3zB/{recordId}</code></li>
+      <li><strong>Auth:</strong> <code>Authorization: Bearer {PAT}</code></li>
+      <li><strong>Body:</strong> <code>{ "fields": { "{fieldId}": ["{linkedRecordId}"] }, "returnFieldsByFieldId": true }</code></li>
+      <li><strong>Clear field:</strong> To unlink, the body sends an empty array: <code>{ "{fieldId}": [] }</code></li>
+      <li><strong>On success:</strong> The in-memory <code>allTransactions</code> record is updated with the returned fields. Status indicator shows <code>&#x2713;</code> in green.</li>
+      <li><strong>On error:</strong> Status indicator shows <code>&#x2717; error message</code> in red. The Airtable error message is extracted from the response JSON where possible.</li>
+    </ul>
+  </div>
+</div>
+
+<!-- 11. TROUBLESHOOTING -->
+<div class="section" id="troubleshooting">
+  <h2 class="section-title"><span class="icon">&#x1F6E0;&#xFE0F;</span> 11. Troubleshooting</h2>
+
+  <div class="card">
+    <div class="ts-item">
+      <div class="ts-problem">&#x274C; P&amp;L shows &ldquo;Loading transactions&hellip; if this persists, open the Leadership Dashboard first&rdquo;</div>
+      <div class="ts-solution">&#x2705; The global <code>allTransactions</code> array is empty. Switch to the Leadership Dashboard tab and wait for data to load (look for KPI cards to populate). Then switch back to P&amp;L. The data is loaded once per session and cached in memory.</div>
+    </div>
+
+    <div class="ts-item">
+      <div class="ts-problem">&#x274C; A transaction appears in the wrong P&amp;L section or is missing entirely</div>
+      <div class="ts-solution">&#x2705; The transaction's Sub-Category or Business link is incorrect or missing in Airtable. Click the value in the relevant area of the grid to open the drill-down modal, then use the type-to-search inputs to correct the Sub-Category and/or Business. Changes save to Airtable immediately. The grid refreshes automatically when you close the modal.</div>
+    </div>
+
+    <div class="ts-item">
+      <div class="ts-problem">&#x274C; Revenue or an expense line shows zero when you expect a value</div>
+      <div class="ts-solution">&#x2705; Check that the transaction in Airtable has both a <strong>Sub-Category</strong> (must match one of the 27 in the allow-list) and a <strong>Business (For Reports)</strong> link pointing to the business currently selected in the dropdown. Also confirm the transaction's <strong>Date</strong> falls within the selected period. Any of these being absent causes the transaction to be silently excluded.</div>
+    </div>
+
+    <div class="ts-item">
+      <div class="ts-problem">&#x274C; Drill-down edit shows &ldquo;&#x2717; no match&rdquo; after typing</div>
+      <div class="ts-solution">&#x2705; The typed name did not match any record in the lookup table (case-insensitive comparison). Check spelling carefully — the name must exactly match an existing Category, Sub-Category, or Business record in Airtable. Use the browser's autocomplete suggestions from the datalist for guidance.</div>
+    </div>
+
+    <div class="ts-item">
+      <div class="ts-problem">&#x274C; Drill-down edit saves but the P&amp;L grid does not update after closing</div>
+      <div class="ts-solution">&#x2705; This should not happen — <code>_pnlEditsMade</code> is set to <code>true</code> on any successful save, and <code>pnlCloseDrill()</code> calls <code>renderPnL()</code> automatically. If it does occur, change the Period dropdown to a different value and back to force a full re-render.</div>
+    </div>
+
+    <div class="ts-item">
+      <div class="ts-problem">&#x274C; AI Analysis fails with &ldquo;Analysis unavailable: API 5xx&rdquo;</div>
+      <div class="ts-solution">&#x2705; The Claude AI proxy at <code>https://claude-proxy.kevinbrittain.workers.dev</code> is temporarily unavailable. Click the <strong>Retry</strong> button. If the error persists, check your internet connection and try again in a few minutes.</div>
+    </div>
+
+    <div class="ts-item">
+      <div class="ts-problem">&#x274C; Charts are blank or not rendering</div>
+      <div class="ts-solution">&#x2705; Chart.js failed to load from CDN. Hard-refresh the page (<kbd>Cmd+Shift+R</kbd> on Mac / <kbd>Ctrl+Shift+R</kbd> on Windows) to force the browser to re-fetch all scripts. If you are offline, charts will not render — all other P&amp;L data is unaffected.</div>
+    </div>
+
+    <div class="ts-item">
+      <div class="ts-problem">&#x274C; KPI card shows wrong target indicator (e.g. green when it should be red)</div>
+      <div class="ts-solution">&#x2705; Cost cards (COGS, OpEx, Maintenance, Wages) use <code>invertComparison: true</code>, meaning lower = green. Verify you are reading the sub-label which shows the budget amount for context. If the targets themselves seem wrong, check the constants at the top of <code>js/pnl.js</code>: <code>PNL_REVENUE_TARGET</code>, <code>PNL_GROSS_MARGIN_TARGET</code>, <code>PNL_NET_MARGIN_TARGET</code>, <code>PNL_CLEAR_PROFIT_TARGET</code>.</div>
+    </div>
+  </div>
+</div>
+
+<!-- 12. CHANGELOG -->
+<div class="section" id="changelog">
+  <h2 class="section-title"><span class="icon">&#x1F4DD;</span> 12. Changelog</h2>
+  <div class="card">
+    <table class="label-table">
+      <thead>
+        <tr><th>Version</th><th>Date</th><th>Changes</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><span class="label-badge lb-blue">2.12</span></td>
+          <td>17 Apr 2026</td>
+          <td>Full SOP rewrite to v2.12 template: added How to Access, complete Airtable Fields Reference with all field IDs, complete Action Buttons table, four-scope drill-down documentation, AI context payload details, filter state variables, PATCH API call spec, expanded troubleshooting, and gap-filled all undocumented behaviour from pnl.js source analysis</td>
+        </tr>
+        <tr>
+          <td><span class="label-badge lb-blue">2.0</span></td>
+          <td>15 Apr 2026</td>
+          <td>Charts, AI analysis, target tracking, 9 KPI cards, SOP reformatted to standard template</td>
+        </tr>
+        <tr>
+          <td><span class="label-badge lb-blue">1.0</span></td>
+          <td>14 Apr 2026</td>
+          <td>Initial release &mdash; P&amp;L grid with drill-down editing</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Property Compliance</title>
+    <link rel="stylesheet" href="css/tokens.css?v=1">
+    <link rel="stylesheet" href="css/sync-bar.css?v=3">
+    <link rel="stylesheet" href="css/quick-task.css?v=2">
+    <script defer src="js/quick-task.js?v=4"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: var(--font-family-base);
+            background: var(--bg-surface); color: var(--text-primary); line-height: 1.4; padding: 24px;
+        }
+        .container { max-width: 1100px; margin: 0 auto; }
+
+        /* Auth Screen */
+        .auth-screen {
+            display: flex; align-items: center; justify-content: center;
+            min-height: 80vh; flex-direction: column;
+        }
+        .auth-box {
+            background: var(--bg-surface); border: 1px solid var(--border-default); border-radius: 12px;
+            padding: 40px; max-width: 440px; width: 100%;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.08); text-align: center;
+        }
+        .auth-box h2 { font-size: var(--fs-2xl); margin-bottom: 8px; }
+        .auth-box p { font-size: var(--fs-base); color: var(--text-muted); margin-bottom: 24px; }
+        .auth-input {
+            width: 100%; padding: 12px 16px; border: 1px solid var(--border-default);
+            border-radius: var(--radius-lg); font-size: var(--fs-md); margin-bottom: 16px;
+            outline: none; font-family: monospace;
+        }
+        .auth-input:focus { border-color: var(--accent); }
+        .auth-btn {
+            width: 100%; padding: 12px; background: var(--accent); color: var(--accent-on);
+            border: none; border-radius: var(--radius-lg); font-size: var(--fs-md); font-weight: var(--fw-semibold); cursor: pointer;
+        }
+        .auth-btn:hover { background: var(--accent); }
+        .auth-error { color: var(--danger); font-size: var(--fs-sm); margin-top: 12px; display: none; }
+        .auth-note { font-size: var(--fs-xs); color: var(--text-muted); margin-top: 16px; }
+
+        /* Loading */
+        .loading-overlay {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255,255,255,0.9);
+            display: none; align-items: center; justify-content: center;
+            flex-direction: column; z-index: 1000;
+        }
+        .spinner {
+            width: 40px; height: 40px; border: 3px solid var(--border-default);
+            border-top: 3px solid var(--accent); border-radius: 50%;
+            animation: spin 0.8s linear infinite; margin-bottom: 16px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Header */
+        .header {
+            margin-bottom: 20px; padding-bottom: 14px;
+            border-bottom: 1px solid var(--border-default);
+            display: flex; align-items: baseline; justify-content: space-between;
+        }
+        .header h1 { font-size: var(--fs-2xl); font-weight: var(--fw-bold); }
+        .header-right { font-size: var(--fs-sm); color: var(--text-muted); display: flex; align-items: center; gap: 12px; }
+        .header-right a { color: var(--accent); text-decoration: none; }
+        .header-right a:hover { text-decoration: underline; }
+        .refresh-dot {
+            width: 8px; height: 8px; background: var(--success); border-radius: 50%;
+            animation: pulse 2s ease-in-out infinite; display: inline-block;
+        }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+        /* Summary bar */
+        .summary-bar {
+            display: flex; gap: 12px; margin-bottom: 18px;
+        }
+        .summary-item {
+            border-radius: 8px; padding: 10px 16px; text-align: center; flex: 1;
+        }
+        .summary-item .num { font-size: var(--fs-3xl); font-weight: var(--fw-bold); line-height: 1.2; }
+        .summary-item .label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; font-weight: var(--fw-semibold); }
+        .si-red { background: var(--danger-bg); border: 1px solid var(--danger-bg); }
+        .si-red .num { color: var(--danger); }
+        .si-amber { background: var(--warning-bg); border: 1px solid var(--warning-bg); }
+        .si-amber .num { color: var(--warning); }
+        .si-green { background: var(--success-bg); border: 1px solid var(--success-bg); }
+        .si-green .num { color: var(--success); }
+        .si-grey { background: var(--bg-surface-2); border: 1px solid var(--border-default); }
+        .si-grey .num { color: var(--text-muted); }
+
+        /* Table */
+        table { width: 100%; border-collapse: collapse; font-size: var(--fs-base); }
+        thead { background: var(--bg-surface-2); position: sticky; top: 0; z-index: 10; }
+        th {
+            padding: 8px 14px; text-align: left; font-size: var(--fs-xs);
+            font-weight: var(--fw-bold); color: var(--text-muted); text-transform: uppercase;
+            letter-spacing: 0.04em; border-bottom: 2px solid var(--border-default);
+        }
+        td { padding: 7px 14px; border-bottom: 1px solid var(--border-subtle); vertical-align: middle; }
+        tr:hover td { background: var(--bg-surface-2); }
+
+        .prop-name { font-weight: 600; white-space: nowrap; }
+        .unit-label { font-size: 10px; color: var(--text-muted); display: block; line-height: 1.2; }
+
+        /* Cert cells — compact inline layout */
+        .cert-cell { white-space: nowrap; }
+        .cert-cell a { color: inherit; text-decoration: none; }
+        .cert-cell a:hover { text-decoration: underline; }
+
+        .tag {
+            display: inline-block; font-size: 9px; font-weight: 700;
+            padding: 1px 6px; border-radius: 3px; text-transform: uppercase;
+            vertical-align: middle;
+        }
+        .tag-active { background: var(--success-bg); color: var(--success); }
+        .tag-expiring { background: var(--warning-bg); color: var(--warning); }
+        .tag-expired { background: var(--danger-bg); color: var(--danger); }
+        .tag-none { background: var(--border-subtle); color: var(--border-default); }
+        .tag-na { background: transparent; color: var(--border-default); font-weight: 400; }
+
+        .cert-date { font-size: 12px; color: var(--text-secondary); margin-left: 6px; vertical-align: middle; }
+        .cert-date.warn { color: var(--warning); font-weight: 600; }
+        .cert-date.bad { color: var(--danger); font-weight: 600; }
+        .cert-extra { font-size: 10px; color: var(--text-muted); margin-left: 2px; }
+        .cert-extra.warn { color: var(--warning); }
+        .cert-extra.bad { color: var(--danger); }
+
+        tr.row-expired td { background: var(--danger-bg); }
+        tr.row-expired:hover td { background: var(--danger-bg); }
+        tr.row-expiring td { background: var(--warning-bg); }
+        tr.row-expiring:hover td { background: var(--warning-bg); }
+
+        .section-header td {
+            background: var(--border-subtle); font-weight: 700; font-size: 11px;
+            color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.03em;
+            padding: 6px 14px;
+        }
+
+        #dashboard { display: none; }
+
+        .section-title {
+            font-size: var(--fs-md); font-weight: var(--fw-bold); color: var(--text-primary);
+            margin: 18px 0 8px; padding-bottom: 4px;
+        }
+        .section-sub { font-weight: var(--fw-regular); color: var(--text-muted); font-size: var(--fs-sm); }
+
+        .agent-section { margin-top: 28px; }
+        .agent-section > summary {
+            cursor: pointer; font-size: 14px; font-weight: 700; color: var(--text-muted);
+            padding: 10px 12px; background: var(--bg-surface-2); border: 1px solid var(--border-default);
+            border-radius: 8px; list-style: none;
+        }
+        .agent-section > summary::-webkit-details-marker { display: none; }
+        .agent-section > summary::before {
+            content: '▶'; display: inline-block; margin-right: 8px;
+            font-size: 10px; transition: transform 0.15s;
+        }
+        .agent-section[open] > summary::before { transform: rotate(90deg); }
+        .agent-section > summary:hover { background: var(--border-subtle); }
+        .agent-table { margin-top: 8px; opacity: 0.78; }
+        .agent-table tr:hover { opacity: 1; }
+        .agent-group-header td {
+            background: var(--accent-soft); font-weight: 700; font-size: 12px;
+            color: var(--accent); padding: 8px 14px; border-bottom: 2px solid var(--accent-soft);
+            letter-spacing: 0.02em;
+        }
+
+        @media (max-width: 700px) {
+            body { padding: 12px; }
+            th, td { padding: 6px 6px; font-size: 12px; }
+            .summary-bar { gap: 6px; }
+            .summary-item { padding: 8px 8px; }
+            .summary-item .num { font-size: 20px; }
+            .cert-date { display: block; margin-left: 0; margin-top: 2px; }
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <!-- Auth Screen -->
+    <div id="authScreen" class="auth-screen">
+        <div class="auth-box">
+            <h2>Property Compliance</h2>
+            <p>Enter your Airtable Personal Access Token to load live data.</p>
+            <input type="password" id="patInput" class="auth-input" placeholder="pat...">
+            <button onclick="authenticate()" class="auth-btn">Connect</button>
+            <div id="authError" class="auth-error">Invalid token. Please check and try again.</div>
+            <div class="auth-note">Token is stored in your browser session only and never sent anywhere except Airtable.</div>
+        </div>
+    </div>
+
+    <!-- Loading -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="spinner"></div>
+        <div style="font-size:14px;color:var(--text-muted);">Loading compliance data...</div>
+    </div>
+
+    <!-- Dashboard -->
+    <div id="dashboard">
+        <div class="header">
+            <h1>Property Compliance</h1>
+            <div class="header-right">
+                <span class="refresh-dot"></span>
+                <span id="liveDate">Live data</span>
+                <a href="#" onclick="loadData(); return false;">Refresh</a>
+                <a href="#" onclick="goToDashboard(); return false;">Back to Dashboard</a>
+            </div>
+        </div>
+        <div data-sync-bar="compliance"></div>
+        <div class="summary-bar" id="summaryBar"></div>
+
+        <h2 class="section-title">🎯 Self-managed <span class="section-sub">— your action list</span></h2>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width:28%">Property</th>
+                    <th style="width:24%">Gas Safety (GSC)</th>
+                    <th style="width:24%">EICR</th>
+                    <th style="width:24%">Landlord Insurance</th>
+                </tr>
+            </thead>
+            <tbody id="selfBody"></tbody>
+        </table>
+
+        <details class="agent-section">
+            <summary>🤝 Agent-managed <span class="section-sub">— <span id="agentCount">0</span> properties handled by agents</span></summary>
+            <table class="agent-table">
+                <thead>
+                    <tr>
+                        <th style="width:28%">Property</th>
+                        <th style="width:24%">Gas Safety (GSC)</th>
+                        <th style="width:24%">EICR</th>
+                        <th style="width:24%">Landlord Insurance</th>
+                    </tr>
+                </thead>
+                <tbody id="agentBody"></tbody>
+            </table>
+        </details>
+    </div>
+</div>
+<script src="js/sync-bar.js?v=6"></script>
+<script>
+function escHtml(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
+const BASE_ID = 'appnqjDpqDniH3IRl';
+
+const T = {
+    certs:      'tbl35rf9qtmq0P87r',
+    properties: 'tbl6f0OkAmTC2jbuG',
+    units:      'tblM3mZCR5kiEdWMj',
+};
+
+const FC = {
+    name:       'fld2v8Yul7bKKEjL2',
+    type:       'fld00ZuxT8uKagM0b',
+    property:   'fldXdDStBL7xrytgT',
+    unit:       'fldAa2aZINAPgmR79',
+    status:     'fldcSmrEQxoqpEQYF',
+    renewalDate:'fldhZw8IrmgLt1hLY',
+    attachments:'fld8dwyOKs4AA0L9v',
+};
+
+const FP = {
+    property:    'fldy2t735TV5e1DIL',
+    shortName:   'fldqMbR329TNY974G',
+    propType:    'fldOySSrZBYkOLLTX',
+    units:       'fldLoWcv40Ag5sHRF',
+    agent:       'fldEUrWVhSp3NY8Hh',
+};
+
+const AGENT_NAMES = ['roc immo', 'intus', 'mears', 'cheffins', 'sequence', 'simon collins'];
+function isAgentManaged(agentStr) {
+    if (!agentStr) return false;
+    const s = String(agentStr).toLowerCase();
+    return AGENT_NAMES.some(a => s.includes(a));
+}
+
+const FU = {
+    name:   'fldr8sliyu8h2jw9t',
+    property: 'fldUJNRGgzgyAwwjt',
+};
+
+let PAT = '';
+
+function goToDashboard() {
+    try {
+        if (window.parent && window.parent !== window && typeof window.parent.switchTab === 'function') {
+            window.parent.switchTab('overview');
+            return;
+        }
+    } catch (e) { /* cross-origin, fall through */ }
+    window.location.href = 'index.html';
+}
+
+function authenticate() {
+    const input = document.getElementById('patInput').value.trim();
+    if (!input) return;
+    PAT = input;
+    sessionStorage.setItem('_dlr_pat', input);
+    localStorage.setItem('airtable_pat', input); // share with Inbound Comms Tracker
+    document.getElementById('authScreen').style.display = 'none';
+    loadData();
+}
+
+(function init() {
+    // Check shared localStorage (set by Inbound Comms Tracker) first, then sessionStorage
+    const saved = localStorage.getItem('airtable_pat') || sessionStorage.getItem('_dlr_pat');
+    if (saved) {
+        PAT = saved;
+        sessionStorage.setItem('_dlr_pat', saved);
+        document.getElementById('authScreen').style.display = 'none';
+        loadData();
+    }
+    document.getElementById('patInput').addEventListener('keydown', e => {
+        if (e.key === 'Enter') authenticate();
+    });
+})();
+
+async function airtableFetch(tableId, params = {}) {
+    const records = [];
+    let offset = null;
+    do {
+        const url = new URL(`https://api.airtable.com/v0/${BASE_ID}/${tableId}`);
+        url.searchParams.set('returnFieldsByFieldId', 'true');
+        Object.entries(params).forEach(([k, v]) => {
+            if (Array.isArray(v)) v.forEach(val => url.searchParams.append(k, val));
+            else url.searchParams.append(k, v);
+        });
+        if (offset) url.searchParams.set('offset', offset);
+
+        const resp = await fetch(url, {
+            headers: { 'Authorization': `Bearer ${PAT}` }
+        });
+        if (resp.status === 401 || resp.status === 403) {
+            sessionStorage.removeItem('_dlr_pat');
+            document.getElementById('authScreen').style.display = 'flex';
+            document.getElementById('authError').style.display = 'block';
+            document.getElementById('loadingOverlay').style.display = 'none';
+            document.getElementById('dashboard').style.display = 'none';
+            throw new Error('Auth failed');
+        }
+        if (!resp.ok) throw new Error(`API error: ${resp.status}`);
+        const data = await resp.json();
+        records.push(...data.records);
+        offset = data.offset || null;
+    } while (offset);
+    return records;
+}
+
+function selectVal(field) {
+    if (!field) return '';
+    if (typeof field === 'string') return field;
+    return field.name || '';
+}
+
+function linkedIds(field) {
+    if (!field) return [];
+    if (Array.isArray(field)) return field.map(x => typeof x === 'string' ? x : (x.id || x));
+    if (field.linkedRecordIds) return field.linkedRecordIds;
+    return [];
+}
+
+function fmtDate(d) {
+    if (!d) return '';
+    const dt = new Date(d + 'T00:00:00');
+    return dt.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function daysUntil(d) {
+    if (!d) return null;
+    const dt = new Date(d + 'T00:00:00'), n = new Date(); n.setHours(0,0,0,0);
+    return Math.ceil((dt - n) / 86400000);
+}
+
+// One place decides what a certificate's status is, so the cell, the KPI tiles and the
+// block-insurance cell can never disagree about the same certificate.
+function certStatus(cert) {
+    const days = daysUntil(cert.d);
+    if (cert.s === 'Expired' || (days !== null && days < 0)) return { tag: 'tag-expired', cls: 'bad', label: 'Expired' };
+    if (days === null) return { tag: 'tag-none', cls: '', label: 'No date' };
+    if (days <= 30) return { tag: 'tag-expiring', cls: 'warn', label: 'Expiring' };
+    return { tag: 'tag-active', cls: '', label: 'Active' };
+}
+
+function cell(cert, na) {
+    if (na) return '<td class="cert-cell"><span class="tag tag-na">N/A</span></td>';
+    if (!cert) return '<td class="cert-cell"><span class="tag tag-none">&mdash;</span></td>';
+
+    const days = daysUntil(cert.d);
+    const { tag, cls, label } = certStatus(cert);
+
+    const dateStr = fmtDate(cert.d);
+    let extra = '';
+    if (days !== null && days < 0) extra = `<span class="cert-extra bad">(${Math.abs(days)}d overdue)</span>`;
+    else if (days !== null && days <= 30) extra = `<span class="cert-extra warn">(${days}d left)</span>`;
+
+    const url = cert.recId ? `https://airtable.com/${BASE_ID}/${T.certs}/${cert.recId}` : '';
+    const open = url ? `<a href="${url}" target="_blank" title="View in Airtable">` : '';
+    const close = url ? '</a>' : '';
+
+    return `<td class="cert-cell">${open}<span class="tag ${tag}">${label}</span><span class="cert-date ${cls}">${dateStr}</span>${extra}${close}</td>`;
+}
+
+// Apartment rows in a block carry the BUILDING insurance certificate, and that
+// certificate is part of the row's colour. The cell used to say only "See building",
+// so an expired building policy turned the row red with nothing on screen explaining
+// why. Show the status here, and the colour always has a visible cause.
+function buildingInsCell(ins) {
+    if (!ins) return '<td class="cert-cell"><span class="tag tag-na">See building</span></td>';
+    const { tag, cls, label } = certStatus(ins);
+    const url = ins.recId ? `https://airtable.com/${BASE_ID}/${T.certs}/${ins.recId}` : '';
+    const open = url ? `<a href="${url}" target="_blank" title="View in Airtable">` : '';
+    const close = url ? '</a>' : '';
+    const dateStr = fmtDate(ins.d);
+    return `<td class="cert-cell">${open}<span class="tag ${tag}">See building &middot; ${label}</span><span class="cert-date ${cls}">${dateStr}</span>${close}</td>`;
+}
+
+function rowClass(gsc, eicr, ins) {
+    for (const c of [gsc, eicr, ins].filter(Boolean)) {
+        const d = daysUntil(c.d);
+        if (c.s === 'Expired' || (d !== null && d < 0)) return 'row-expired';
+    }
+    for (const c of [gsc, eicr, ins].filter(Boolean)) {
+        const d = daysUntil(c.d);
+        if (d !== null && d <= 30) return 'row-expiring';
+    }
+    return '';
+}
+
+async function loadData() {
+    document.getElementById('loadingOverlay').style.display = 'flex';
+
+    try {
+        const [certRecs, propRecs, unitRecs] = await Promise.all([
+            airtableFetch(T.certs),
+            airtableFetch(T.properties),
+            airtableFetch(T.units),
+        ]);
+
+        const props = {};
+        for (const r of propRecs) {
+            props[r.id] = {
+                name: r.fields[FP.property] || '',
+                shortName: r.fields[FP.shortName] || r.fields[FP.property] || '',
+                type: selectVal(r.fields[FP.propType]),
+                unitIds: linkedIds(r.fields[FP.units]),
+                agent: r.fields[FP.agent] || '',
+                agentManaged: isAgentManaged(r.fields[FP.agent]),
+            };
+        }
+
+        const units = {};
+        for (const r of unitRecs) {
+            const propLinks = linkedIds(r.fields[FU.property]);
+            units[r.id] = {
+                name: r.fields[FU.name] || '',
+                propertyId: propLinks[0] || null,
+            };
+        }
+
+        const CERT_TYPES = ['GSC', 'EICR', 'Landlord Insurance'];
+        const certs = [];
+        for (const r of certRecs) {
+            const type = selectVal(r.fields[FC.type]);
+            if (!CERT_TYPES.includes(type)) continue;
+            certs.push({
+                recId: r.id,
+                type,
+                propertyId: linkedIds(r.fields[FC.property])[0] || null,
+                unitId: linkedIds(r.fields[FC.unit])[0] || null,
+                s: selectVal(r.fields[FC.status]),
+                d: r.fields[FC.renewalDate] || null,
+            });
+        }
+
+        const blockPropIds = new Set();
+        const standardPropIds = new Set();
+        for (const [id, p] of Object.entries(props)) {
+            if (p.type === 'Block') blockPropIds.add(id);
+            else standardPropIds.add(id);
+        }
+
+        const stdRows = {};
+        for (const id of standardPropIds) {
+            stdRows[id] = { gsc: null, eicr: null, ins: null };
+        }
+
+        const blockRows = {};
+        const blockPropNames = {};
+        for (const id of blockPropIds) {
+            blockPropNames[id] = props[id].shortName;
+            for (const uid of props[id].unitIds) {
+                blockRows[uid] = { propId: id, gsc: null, eicr: null, ins: null };
+            }
+        }
+
+        // Helper: keep the cert with the latest renewal date (or prefer any date over none)
+        function isNewer(existing, candidate) {
+            if (!existing) return true;
+            if (!candidate.d) return false;
+            if (!existing.d) return true;
+            return candidate.d > existing.d; // ISO date string comparison
+        }
+
+        for (const c of certs) {
+            if (c.s === 'Expired') continue; // skip expired certs — only show current
+            const certObj = { s: c.s, d: c.d, recId: c.recId };
+            const key = c.type === 'GSC' ? 'gsc' : c.type === 'EICR' ? 'eicr' : 'ins';
+
+            if (c.unitId && blockRows[c.unitId]) {
+                if (isNewer(blockRows[c.unitId][key], certObj)) blockRows[c.unitId][key] = certObj;
+            } else if (c.propertyId && stdRows[c.propertyId]) {
+                if (isNewer(stdRows[c.propertyId][key], certObj)) stdRows[c.propertyId][key] = certObj;
+            } else if (c.propertyId && blockPropIds.has(c.propertyId)) {
+                for (const uid of props[c.propertyId].unitIds) {
+                    if (isNewer(blockRows[uid][key], certObj)) blockRows[uid][key] = certObj;
+                }
+            }
+        }
+
+        const sortedStd = Object.entries(stdRows)
+            .map(([id, row]) => ({ id, name: props[id]?.shortName || props[id]?.name || id, ...row }))
+            .sort((a, b) => a.name.localeCompare(b.name));
+
+        const blocksByProp = {};
+        for (const [uid, row] of Object.entries(blockRows)) {
+            const pid = row.propId;
+            if (!blocksByProp[pid]) blocksByProp[pid] = [];
+            blocksByProp[pid].push({ uid, unitName: units[uid]?.name || uid, ...row });
+        }
+        for (const pid of Object.keys(blocksByProp)) {
+            blocksByProp[pid].sort((a, b) => a.unitName.localeCompare(b.unitName));
+        }
+
+        // Split self vs agent-managed
+        const selfStd = sortedStd.filter(r => !props[r.id]?.agentManaged);
+        const agentStd = sortedStd.filter(r => props[r.id]?.agentManaged);
+        const selfBlocks = {}, agentBlocks = {};
+        for (const [pid, rows] of Object.entries(blocksByProp)) {
+            (props[pid]?.agentManaged ? agentBlocks : selfBlocks)[pid] = rows;
+        }
+
+        // Stats — self-managed only
+        let expired = 0, expiring = 0, active = 0, missing = 0, noDate = 0;
+        // A certificate with no Renewal Date used to fall through to active++, so the
+        // green KPI counted certificates the grid itself labels grey "No date". Unknown
+        // is not the same as in date, and a KPI that disagrees with the cell beside it
+        // cannot be acted on. Counted separately, and shown as its own tile.
+        // Routed through certStatus so the tile and the cell can never disagree
+        // about the same certificate. One function decides, everything else counts.
+        const countCert = (c) => {
+            if (!c) { missing++; return; }
+            const label = certStatus(c).label;
+            if (label === 'Expired') expired++;
+            else if (label === 'No date') noDate++;
+            else if (label === 'Expiring') expiring++;
+            else active++;
+        };
+        for (const row of selfStd) { countCert(row.gsc); countCert(row.eicr); countCert(row.ins); }
+        for (const uRows of Object.values(selfBlocks)) {
+            for (const row of uRows) { countCert(row.eicr); }
+        }
+
+        document.getElementById('summaryBar').innerHTML = `
+            <div class="summary-item si-red"><div class="num">${expired}</div><div class="label">Expired</div></div>
+            <div class="summary-item si-amber"><div class="num">${expiring}</div><div class="label">Expiring (30d)</div></div>
+            <div class="summary-item si-green"><div class="num">${active}</div><div class="label">Active</div></div>
+            <div class="summary-item si-grey"><div class="num">${noDate}</div><div class="label">No Date</div></div>
+            <div class="summary-item si-grey"><div class="num">${missing}</div><div class="label">No Cert</div></div>
+        `;
+
+        const renderRows = (stdList, blocksMap) => {
+            let h = '';
+            for (const row of stdList) {
+                h += `<tr class="${rowClass(row.gsc, row.eicr, row.ins)}">
+                    <td class="prop-name">${escHtml(row.name)}${props[row.id]?.agent ? `<span class="unit-label">${escHtml(props[row.id].agent)}</span>` : ''}</td>
+                    ${cell(row.gsc)}
+                    ${cell(row.eicr)}
+                    ${cell(row.ins)}
+                </tr>`;
+            }
+            for (const [pid, unitRows] of Object.entries(blocksMap)) {
+                const pName = blockPropNames[pid] || pid;
+                const agentLabel = props[pid]?.agent ? ` &mdash; ${escHtml(props[pid].agent)}` : '';
+                h += `<tr class="section-header"><td colspan="4">${escHtml(pName)} (${unitRows.length} Apartments &mdash; No Gas${agentLabel})</td></tr>`;
+                for (const row of unitRows) {
+                    h += `<tr class="${rowClass(null, row.eicr, row.ins)}">
+                        <td class="prop-name">${escHtml(row.unitName)}<span class="unit-label">${escHtml(pName)}</span></td>
+                        <td class="cert-cell"><span class="tag tag-na">N/A</span></td>
+                        ${cell(row.eicr)}
+                        ${buildingInsCell(row.ins)}
+                    </tr>`;
+                }
+            }
+            return h;
+        };
+
+        document.getElementById('selfBody').innerHTML = renderRows(selfStd, selfBlocks);
+
+        // Agent section: group by agent name with sub-headers
+        const agentGroups = {};
+        for (const row of agentStd) {
+            const agentName = props[row.id]?.agent || 'Unknown';
+            if (!agentGroups[agentName]) agentGroups[agentName] = { std: [], blocks: {} };
+            agentGroups[agentName].std.push(row);
+        }
+        for (const [pid, unitRows] of Object.entries(agentBlocks)) {
+            const agentName = props[pid]?.agent || 'Unknown';
+            if (!agentGroups[agentName]) agentGroups[agentName] = { std: [], blocks: {} };
+            agentGroups[agentName].blocks[pid] = unitRows;
+        }
+
+        const sortedAgentNames = Object.keys(agentGroups).sort((a, b) => a.localeCompare(b));
+        let agentHtml = '';
+        for (const agentName of sortedAgentNames) {
+            const grp = agentGroups[agentName];
+            const count = grp.std.length + Object.values(grp.blocks).reduce((n, r) => n + r.length, 0);
+            agentHtml += `<tr class="agent-group-header"><td colspan="4">${escHtml(agentName)} (${count})</td></tr>`;
+            agentHtml += renderRows(grp.std, grp.blocks);
+        }
+        document.getElementById('agentBody').innerHTML = agentHtml;
+
+        const agentCount = agentStd.length + Object.values(agentBlocks).reduce((n, r) => n + r.length, 0);
+        document.getElementById('agentCount').textContent = agentCount;
+
+        const now = new Date();
+        document.getElementById('liveDate').textContent = 'Live \u2014 ' + now.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+
+        document.getElementById('dashboard').style.display = 'block';
+        document.getElementById('loadingOverlay').style.display = 'none';
+
+        // \u2500\u2500 Sync Bar + Health Checks \u2500\u2500
+        // Stash the loaded data on window so the (lazy) check closures can read it.
+        window._complianceData = { certs, props, units, blockPropIds, standardPropIds };
+        if (typeof registerSyncBar === 'function') {
+            registerSyncBar('compliance', {
+                refreshFn: () => loadData(),
+                checks: [
+                    {
+                        name: 'Certificates table fetched', kind: 'sync', run: () => {
+                            const c = (window._complianceData || {}).certs || [];
+                            if (c.length === 0) return { status: 'fail', detail: 'No certificate records returned \u2014 Airtable fetch failed' };
+                            return { status: 'pass', detail: `${c.length} certificates loaded across GSC / EICR / Landlord Insurance` };
+                        }
+                    },
+                    {
+                        name: 'Properties table fetched', kind: 'sync', run: () => {
+                            const p = (window._complianceData || {}).props || {};
+                            const n = Object.keys(p).length;
+                            if (n === 0) return { status: 'fail', detail: 'No properties returned' };
+                            return { status: 'pass', detail: `${n} properties loaded` };
+                        }
+                    },
+                    {
+                        name: 'Rental Units table fetched', kind: 'sync', run: () => {
+                            const u = (window._complianceData || {}).units || {};
+                            const n = Object.keys(u).length;
+                            if (n === 0) return { status: 'fail', detail: 'No units returned' };
+                            return { status: 'pass', detail: `${n} rental units loaded` };
+                        }
+                    },
+                    {
+                        name: 'Every certificate has a property link', kind: 'sync', run: () => {
+                            const certs = (window._complianceData || {}).certs || [];
+                            const orphans = certs.filter(c => !c.propertyId);
+                            if (orphans.length) return { status: 'warn', detail: `${orphans.length} certificate(s) not linked to a property \u2014 won't show on the grid` };
+                            return { status: 'pass', detail: `All ${certs.length} certificates link to a property` };
+                        }
+                    },
+                    {
+                        name: 'Renewal dates parseable', kind: 'sync', run: () => {
+                            const certs = (window._complianceData || {}).certs || [];
+                            const valid = certs.filter(c => c.d && !isNaN(new Date(c.d).getTime()));
+                            const missing = certs.length - valid.length;
+                            if (missing > 0) return { status: 'warn', detail: `${missing} certificate(s) missing or have unparseable renewal date \u2014 will display as N/A` };
+                            return { status: 'pass', detail: `All ${certs.length} certificates have a valid renewal date` };
+                        }
+                    },
+                    {
+                        name: 'Block vs Standard property classification', kind: 'sync', run: () => {
+                            const d = window._complianceData || {};
+                            const blocks = (d.blockPropIds || new Set()).size;
+                            const standard = (d.standardPropIds || new Set()).size;
+                            return { status: 'pass', detail: `${blocks} Block properties \u00b7 ${standard} Standard properties (drives the two-table layout)` };
+                        }
+                    },
+                    {
+                        name: 'Status field is one of the known options', kind: 'automation', run: () => {
+                            const certs = (window._complianceData || {}).certs || [];
+                            const known = new Set(['Active', 'Valid', 'Expired', '']);
+                            const odd = certs.filter(c => !known.has(c.s));
+                            if (odd.length) return { status: 'warn', detail: `${odd.length} certificate(s) have an unrecognised status value` };
+                            return { status: 'pass', detail: 'All certificates have a recognised Status (Active / Valid / Expired)' };
+                        }
+                    },
+                ],
+            });
+            markTabSynced('compliance');
+        }
+
+    } catch (err) {
+        if (err.message !== 'Auth failed') {
+            document.getElementById('loadingOverlay').style.display = 'none';
+            alert('Error loading data: ' + err.message);
+        }
+    }
+}
+</script>
+</body>
+</html>

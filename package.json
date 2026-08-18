@@ -1,0 +1,14 @@
+{
+  "name": "leadership-dashboard",
+  "private": true,
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:sync": "playwright test tests/sync-invariants/",
+    "test:sync:ui": "playwright test tests/sync-invariants/ --ui"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0",
+    "vitest": "^3.2.1"
+  }
+}
